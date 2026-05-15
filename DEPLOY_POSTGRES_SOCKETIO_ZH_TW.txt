@@ -1,0 +1,248 @@
+金融王國 RPG：PostgreSQL + Socket.IO 版部署說明
+================================================
+
+一、這版和上一版差異
+--------------------
+
+這版已從 SQLite 改成 PostgreSQL，並加入 Socket.IO 即時戰鬥功能。
+
+原本：
+- SQLite
+- DB_PATH=/data/finance_rpg.sqlite
+- 需要 Railway Volume 保存資料
+
+新版：
+- PostgreSQL
+- DATABASE_URL=postgresql://...
+- 不需要 SQLite Volume
+- Railway PostgreSQL 服務會保存資料
+- 世界 BOSS 與競技場支援 Socket.IO 即時廣播
+
+
+二、本機準備
+------------
+
+請先安裝：
+
+1. Node.js 20 以上
+2. Git
+3. VSCode
+4. PostgreSQL（本機測試才需要；若只部署 Railway，可先不裝）
+
+
+三、解壓縮專案
+--------------
+
+把 ZIP 解壓縮，例如：
+
+finance-rpg-taiwan-pg-socket/
+
+用 VSCode 開啟這個資料夾。
+
+VSCode 上方：
+
+Terminal -> New Terminal
+
+接下來所有 git、npm 指令都在這個 Terminal 執行。
+
+
+四、本機安裝套件
+----------------
+
+在專案根目錄執行：
+
+npm install
+
+
+五、本機環境變數
+----------------
+
+複製：
+
+.env.example
+
+改名成：
+
+.env
+
+內容範例：
+
+PORT=3000
+NODE_ENV=development
+JWT_SECRET=請改成很長的隨機字串
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/finance_rpg
+
+如果你沒有本機 PostgreSQL，可以先跳過本機測試，直接部署 Railway。
+
+
+六、本機啟動
+------------
+
+npm run dev
+
+打開瀏覽器：
+
+http://localhost:3000
+
+
+七、上傳 GitHub
+---------------
+
+1. 初始化 Git：
+
+git init
+
+2. 確認 .gitignore 已存在，內容應包含：
+
+node_modules/
+.env
+*.sqlite
+*.sqlite3
+.DS_Store
+npm-debug.log*
+
+3. 加入檔案：
+
+git add .
+
+4. 建立 commit：
+
+git commit -m "Upgrade to PostgreSQL and Socket.IO"
+
+5. 到 GitHub 建立空 repo，例如：
+
+finance-rpg-taiwan-pg-socket
+
+不要勾 README、不要勾 .gitignore、不要勾 License。
+
+6. 綁定遠端：
+
+git remote add origin https://github.com/你的帳號/finance-rpg-taiwan-pg-socket.git
+
+7. 推上 GitHub：
+
+git branch -M main
+git push -u origin main
+
+
+八、Railway 建立 Web Service
+---------------------------
+
+1. 進入 Railway
+2. New Project
+3. Deploy from GitHub repo
+4. 選你的 repo：finance-rpg-taiwan-pg-socket
+5. Railway 會自動偵測 Node.js 專案並執行 npm install / npm start
+
+
+九、Railway 新增 PostgreSQL
+---------------------------
+
+在同一個 Railway Project 裡：
+
+New -> Database -> Add PostgreSQL
+
+建立後會出現 PostgreSQL service。
+
+
+十、設定 Railway Variables
+--------------------------
+
+進入 Web Service，不是 PostgreSQL service。
+
+點：
+
+Variables
+
+新增：
+
+NODE_ENV=production
+JWT_SECRET=請改成至少32字元以上的超長隨機字串
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+
+注意：
+
+1. DATABASE_URL 要指向 Railway PostgreSQL。
+2. 不要再設定 DB_PATH。
+3. 不需要再設定 /data Volume。
+4. PORT 不用自己設定，Railway 會自動提供。
+
+
+十一、重新部署
+--------------
+
+設定完 Variables 後，Railway 通常會自動 redeploy。
+
+也可以手動：
+
+Deployments -> Redeploy
+
+
+十二、確認成功
+--------------
+
+成功後 Railway 會提供公開網址，例如：
+
+https://你的服務名稱.up.railway.app
+
+打開後應該可以：
+
+1. 註冊帳號
+2. 選職業
+3. 登入
+4. 進入世界 BOSS
+5. 點「加入即時 BOSS 房」
+6. 點「Socket 即時攻擊」
+7. 其他玩家畫面會即時看到戰鬥紀錄與 BOSS HP 更新
+
+
+十三、常見錯誤
+--------------
+
+問題一：Application failed to respond
+
+請檢查：
+- package.json 是否有 start script
+- server.js 是否使用 process.env.PORT
+- Railway logs 是否有 DATABASE_URL 錯誤
+
+問題二：Database init failed
+
+請檢查：
+- Railway 是否已新增 PostgreSQL
+- Web Service Variables 是否有 DATABASE_URL=${{Postgres.DATABASE_URL}}
+- 不要把 DATABASE_URL 設在 PostgreSQL service，要設在 Web Service
+
+問題三：登入或註冊失敗
+
+請檢查：
+- JWT_SECRET 是否存在
+- PostgreSQL 是否連線成功
+- Railway Logs 是否有 table 或 connection error
+
+問題四：Socket.IO 沒有即時反應
+
+請檢查：
+- index.html 是否有 /socket.io/socket.io.js
+- Railway 網址是否使用 https
+- 瀏覽器 Console 是否有 WebSocket 連線錯誤
+
+問題五：以前 SQLite 的玩家資料不見
+
+這版改 PostgreSQL，不會自動讀取舊 SQLite。
+若要搬資料，需要另外寫 migration script。
+
+
+十四、正式營運前建議
+--------------------
+
+若要真的開放多人遊玩，建議再加：
+
+1. rate limit，避免 API 與 Socket 被刷
+2. Redis，保存即時房間狀態與排行榜快取
+3. Prisma 或 Knex，管理 DB migration
+4. 管理員後台
+5. 角色刪除與封鎖機制
+6. 戰鬥冷卻時間與防外掛驗證
+7. Cloudflare DNS / WAF
+8. 備份 PostgreSQL
