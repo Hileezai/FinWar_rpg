@@ -1,7 +1,7 @@
 {
   "name": "finance-rpg-taiwan-pg-socket",
-  "version": "1.1.0",
-  "description": "8-bit Taiwan finance industry web RPG MVP with PostgreSQL and Socket.IO realtime battle",
+  "version": "1.2.0",
+  "description": "8-bit Taiwan finance RPG with PostgreSQL, Socket.IO, custom sprites and daily quiz missions",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -18,5 +18,7 @@
     "pg": "^8.13.1",
     "socket.io": "^4.8.1"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

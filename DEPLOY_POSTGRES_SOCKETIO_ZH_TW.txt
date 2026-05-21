@@ -1,22 +1,27 @@
-金融王國 RPG：PostgreSQL + Socket.IO 版部署說明
-================================================
+金融王國 RPG：PostgreSQL + Socket.IO + 自訂素材版部署說明
+==========================================================
 
-一、這版和上一版差異
---------------------
+一、這版內容
+------------
 
-這版已從 SQLite 改成 PostgreSQL，並加入 Socket.IO 即時戰鬥功能。
+此版本包含：
 
-原本：
-- SQLite
-- DB_PATH=/data/finance_rpg.sqlite
-- 需要 Railway Volume 保存資料
+1. PostgreSQL 資料庫
+2. Socket.IO 即時戰鬥
+3. 自訂 8-bit 圖像素材
+4. 3～5 句詳細戰鬥敘述
+5. 每職業 5 個技能
+6. 每日任務：台灣銀行業知識問答
+7. 每日任務題庫自動寫入 PostgreSQL
 
-新版：
-- PostgreSQL
-- DATABASE_URL=postgresql://...
-- 不需要 SQLite Volume
-- Railway PostgreSQL 服務會保存資料
-- 世界 BOSS 與競技場支援 Socket.IO 即時廣播
+素材位置：
+
+public/assets/images/
+
+每日任務資料表：
+
+quiz_questions
+daily_quiz_attempts
 
 
 二、本機準備
@@ -35,7 +40,7 @@
 
 把 ZIP 解壓縮，例如：
 
-finance-rpg-taiwan-pg-socket/
+finance-rpg-taiwan-pg-socketio-assets/
 
 用 VSCode 開啟這個資料夾。
 
@@ -84,6 +89,8 @@ npm run dev
 
 http://localhost:3000
 
+第一次啟動時，server.js 會自動建立資料表並寫入每日任務題庫。
+
 
 七、上傳 GitHub
 ---------------
@@ -107,17 +114,17 @@ git add .
 
 4. 建立 commit：
 
-git commit -m "Upgrade to PostgreSQL and Socket.IO"
+git commit -m "Add custom sprites daily quiz and improved battle"
 
 5. 到 GitHub 建立空 repo，例如：
 
-finance-rpg-taiwan-pg-socket
+finance-rpg-taiwan-pg-socketio-assets
 
 不要勾 README、不要勾 .gitignore、不要勾 License。
 
 6. 綁定遠端：
 
-git remote add origin https://github.com/你的帳號/finance-rpg-taiwan-pg-socket.git
+git remote add origin https://github.com/你的帳號/finance-rpg-taiwan-pg-socketio-assets.git
 
 7. 推上 GitHub：
 
@@ -125,14 +132,19 @@ git branch -M main
 git push -u origin main
 
 
-八、Railway 建立 Web Service
----------------------------
+八、Railway 建立專案
+-------------------
 
-1. 進入 Railway
+1. 到 Railway
 2. New Project
 3. Deploy from GitHub repo
-4. 選你的 repo：finance-rpg-taiwan-pg-socket
-5. Railway 會自動偵測 Node.js 專案並執行 npm install / npm start
+4. 選擇你剛剛上傳的 repository
+
+Railway 會讀取 package.json：
+
+start script: node server.js
+
+並自動部署。
 
 
 九、Railway 新增 PostgreSQL
@@ -142,61 +154,121 @@ git push -u origin main
 
 New -> Database -> Add PostgreSQL
 
-建立後會出現 PostgreSQL service。
+建立完成後，Railway 會產生 PostgreSQL service。
+
+這版不需要 SQLite Volume。
+不要再設定 DB_PATH。
 
 
-十、設定 Railway Variables
---------------------------
+十、Railway Web Service Variables
+--------------------------------
 
-進入 Web Service，不是 PostgreSQL service。
+請到 Web Service，不是 PostgreSQL service。
 
-點：
-
-Variables
-
-新增：
+Variables 加入：
 
 NODE_ENV=production
-JWT_SECRET=請改成至少32字元以上的超長隨機字串
+JWT_SECRET=請改成至少 32 字元以上的隨機密碼
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 
 注意：
 
-1. DATABASE_URL 要指向 Railway PostgreSQL。
-2. 不要再設定 DB_PATH。
-3. 不需要再設定 /data Volume。
-4. PORT 不用自己設定，Railway 會自動提供。
+1. DATABASE_URL 要設在 Web Service。
+2. 若你的 PostgreSQL service 名稱不是 Postgres，Railway 變數名稱可能不同，請用 Railway 提供的 Reference Variables 選取。
+3. JWT_SECRET 不要上傳到 GitHub，不要寫在 server.js。
 
 
-十一、重新部署
---------------
+十一、PostgreSQL 會存哪些資料
+----------------------------
 
-設定完 Variables 後，Railway 通常會自動 redeploy。
+主要資料表：
 
-也可以手動：
+users：帳號與 bcrypt 密碼雜湊
+players：角色、等級、HP、疲勞、裝備、公會、碎片
+dungeon_claims：地下城每層三天獎勵冷卻
+purchases：商店每日購買上限
+boss_state：每日世界 BOSS 狀態
+boss_damage：每日 BOSS 傷害排行
+battle_log：玩家戰鬥紀錄
+quiz_questions：每日任務題庫
+daily_quiz_attempts：每日任務作答紀錄
 
-Deployments -> Redeploy
-
-
-十二、確認成功
---------------
-
-成功後 Railway 會提供公開網址，例如：
-
-https://你的服務名稱.up.railway.app
-
-打開後應該可以：
-
-1. 註冊帳號
-2. 選職業
-3. 登入
-4. 進入世界 BOSS
-5. 點「加入即時 BOSS 房」
-6. 點「Socket 即時攻擊」
-7. 其他玩家畫面會即時看到戰鬥紀錄與 BOSS HP 更新
+題庫會在 server 啟動時自動 seed。
+如果未來你想改題目，可以直接改 server.js 裡的 QUIZ_QUESTIONS，推上 GitHub 後 Railway 會重新部署並更新題庫。
 
 
-十三、常見錯誤
+十二、自訂圖片替換方式
+---------------------
+
+圖片資料夾：
+
+public/assets/images/
+
+分類：
+
+classes/      職業角色圖
+bosses/       世界 BOSS 圖
+monsters/     地下城怪物圖
+equipment/    裝備圖示
+items/        商店道具圖示
+ui/           導覽與 UI 圖示
+scenes/       場景圖
+source/       原始合成圖備份
+
+最簡單替換方式：
+
+1. 用同樣檔名覆蓋圖片
+2. git add .
+3. git commit -m "Update game sprites"
+4. git push
+
+Railway 會自動重新部署。
+
+如果你改檔名，請同步改：
+
+server.js
+public/app.js
+
+中的 image 路徑。
+
+
+十三、Socket.IO 測試
+-------------------
+
+部署完成後：
+
+1. 註冊兩個帳號，或請朋友一起進入
+2. 進入世界 BOSS
+3. 點「加入即時 BOSS 房」
+4. 點「Socket 即時攻擊」
+5. 其他玩家畫面會看到即時戰鬥敘述與 BOSS HP 更新
+
+競技場測試：
+
+1. 進入 PK 競技場
+2. 點「加入即時競技場」
+3. 點「Socket 即時攻擊」
+4. 同房玩家會看到攻擊紀錄
+
+
+十四、每日任務測試
+-----------------
+
+1. 登入後點「每日任務」
+2. 系統每天抽 5 題
+3. 答完送出
+4. 依正確題數給予 EXP 與金幣
+5. 同一天不能重複作答
+
+獎勵設計：
+
+基本 EXP 50 + 每題正確 35 EXP + 全對額外 80 EXP
+基本金幣 150 + 每題正確 90 金幣 + 全對額外 200 金幣
+
+最高：305 EXP + 800 金幣
+
+
+十五、常見錯誤
 --------------
 
 問題一：Application failed to respond
@@ -227,13 +299,22 @@ https://你的服務名稱.up.railway.app
 - Railway 網址是否使用 https
 - 瀏覽器 Console 是否有 WebSocket 連線錯誤
 
-問題五：以前 SQLite 的玩家資料不見
+問題五：每日任務沒有題目
 
-這版改 PostgreSQL，不會自動讀取舊 SQLite。
-若要搬資料，需要另外寫 migration script。
+請檢查：
+- Railway Logs 是否有 quiz_questions 建表錯誤
+- PostgreSQL service 是否正常
+- server.js 啟動時是否成功執行 seedQuizQuestions
+
+問題六：圖片沒有顯示
+
+請檢查：
+- public/assets/images/ 是否已上傳 GitHub
+- 檔案大小寫是否一致
+- 圖片路徑是否仍符合 server.js 或 public/app.js 的 image 設定
 
 
-十四、正式營運前建議
+十六、正式營運前建議
 --------------------
 
 若要真的開放多人遊玩，建議再加：
@@ -241,8 +322,9 @@ https://你的服務名稱.up.railway.app
 1. rate limit，避免 API 與 Socket 被刷
 2. Redis，保存即時房間狀態與排行榜快取
 3. Prisma 或 Knex，管理 DB migration
-4. 管理員後台
+4. 管理員後台，可編輯題庫、封鎖玩家、調整活動
 5. 角色刪除與封鎖機制
 6. 戰鬥冷卻時間與防外掛驗證
 7. Cloudflare DNS / WAF
-8. 備份 PostgreSQL
+8. PostgreSQL 備份與還原演練
+9. 題庫版本控管與法規更新提醒
