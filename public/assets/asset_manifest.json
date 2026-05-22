@@ -121,5 +121,47 @@
     "rank.png",
     "settings.png",
     "shop.png"
-  ]
+  ],
+  "equipment": {
+    "heads": [
+      "assets/images/equipment/heads/head_01.png",
+      "assets/images/equipment/heads/head_02.png",
+      "assets/images/equipment/heads/head_03.png",
+      "assets/images/equipment/heads/head_04.png",
+      "assets/images/equipment/heads/head_05.png",
+      "assets/images/equipment/heads/head_06.png",
+      "assets/images/equipment/heads/head_07.png",
+      "assets/images/equipment/heads/head_08.png"
+    ],
+    "clothes": [
+      "assets/images/equipment/clothes/clothes_01.png",
+      "assets/images/equipment/clothes/clothes_02.png",
+      "assets/images/equipment/clothes/clothes_03.png",
+      "assets/images/equipment/clothes/clothes_04.png",
+      "assets/images/equipment/clothes/clothes_05.png",
+      "assets/images/equipment/clothes/clothes_06.png",
+      "assets/images/equipment/clothes/clothes_07.png",
+      "assets/images/equipment/clothes/clothes_08.png"
+    ],
+    "pants": [
+      "assets/images/equipment/pants/pants_01.png",
+      "assets/images/equipment/pants/pants_02.png",
+      "assets/images/equipment/pants/pants_03.png",
+      "assets/images/equipment/pants/pants_04.png",
+      "assets/images/equipment/pants/pants_05.png",
+      "assets/images/equipment/pants/pants_06.png",
+      "assets/images/equipment/pants/pants_07.png",
+      "assets/images/equipment/pants/pants_08.png"
+    ],
+    "shoes": [
+      "assets/images/equipment/shoes/shoes_01.png",
+      "assets/images/equipment/shoes/shoes_02.png",
+      "assets/images/equipment/shoes/shoes_03.png",
+      "assets/images/equipment/shoes/shoes_04.png",
+      "assets/images/equipment/shoes/shoes_05.png",
+      "assets/images/equipment/shoes/shoes_06.png",
+      "assets/images/equipment/shoes/shoes_07.png",
+      "assets/images/equipment/shoes/shoes_08.png"
+    ]
+  }
 }
