@@ -126,3 +126,24 @@ daily_quiz_attempts
 - Redis 排行榜與房間狀態快取
 - HTTPS / Domain / WAF
 - 題庫後台管理介面
+
+
+## v1.3 更新重點
+
+- 地下城與 BOSS 掉落裝備時，跳出「目前裝備 vs 新裝備」比較介面，可直接選擇替換或保留。
+- 裝備圖示改為依部位對應：頭、衣服、褲子、鞋子分別使用獨立像素圖示，避免衣服顯示成頭盔。
+- 新增 `guilds` 資料表並修正公會建立/加入流程。
+- 角色介面與上方狀態列顯示目前 EXP 與升級所需 EXP。
+- 新增右側 Socket.IO 即時聊天室，分為「大眾聊天室」與「公會聊天室」。
+- 世界 BOSS HP 調整為原本 20 倍，並下修碎片掉落率。
+
+### PostgreSQL 新增資料表
+
+本版啟動時會自動建立：
+
+```sql
+guilds
+chat_messages
+```
+
+不需要手動 migration；Railway 重新部署後，`server.js` 會透過 `CREATE TABLE IF NOT EXISTS` 自動建立。
