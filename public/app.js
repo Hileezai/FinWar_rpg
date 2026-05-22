@@ -5,6 +5,9 @@ let me = null;
 let pendingItem = null;
 let page = 'home';
 let socket = null;
+let chatChannel = localStorage.chatChannel || 'global';
+let chatMessages = { global: [], guild: [] };
+let chatStatus = { guild: '' };
 
 const names = {
   home: '角色',
@@ -47,11 +50,22 @@ function img(src, cls = 'pixel-img', alt = '') {
   if (!src) return '';
   return `<img class="${cls}" src="${src}" alt="${esc(alt)}">`;
 }
+function localSlotAsset(it) {
+  const n8 = String((((Number(it?.level || 1) + String(it?.name || '').length) % 8) + 1)).padStart(2, '0');
+  const n16 = String((((Number(it?.level || 1) + String(it?.name || '').length) % 16) + 1)).padStart(2, '0');
+  if (it?.slot === '頭') return `assets/images/equipment/heads/head_${n8}.png`;
+  if (it?.slot === '衣服') return `assets/images/equipment/clothes/clothes_${n8}.png`;
+  if (it?.slot === '褲子') return `assets/images/equipment/pants/pants_${n8}.png`;
+  if (it?.slot === '鞋子') return `assets/images/equipment/shoes/shoes_${n8}.png`;
+  if (it?.slot === '武器' || it?.slot === '副武器') return `assets/images/equipment/weapons/weapon_${n16}.png`;
+  if (it?.slot?.includes('飾品')) return `assets/images/equipment/accessories/accessory_${n8}.png`;
+  return 'assets/images/equipment/clothes/clothes_01.png';
+}
 function itemImage(it) {
+  if (!it) return 'assets/images/equipment/clothes/clothes_01.png';
+  if (['頭', '衣服', '褲子', '鞋子'].includes(it.slot)) return localSlotAsset(it);
   if (it?.image) return it.image;
-  if (it?.slot === '武器' || it?.slot === '副武器') return 'assets/images/equipment/weapons/weapon_01.png';
-  if (it?.slot?.includes('飾品')) return 'assets/images/equipment/accessories/accessory_01.png';
-  return 'assets/images/equipment/armor/armor_01.png';
+  return localSlotAsset(it);
 }
 function shopImage(item) {
   return item[5] || 'assets/images/items/coin_bag.png';
@@ -96,6 +110,7 @@ async function boot() {
 function connectSocket() {
   if (!token || socket) return;
   socket = io({ auth: { token } });
+  socket.on('connect', () => socket.emit('joinChat'));
   socket.on('battleLog', d => addRealtimeLog(d.text));
   socket.on('bossUpdate', d => {
     addRealtimeLog(d.text);
@@ -103,9 +118,24 @@ function connectSocket() {
   });
   socket.on('actionResult', d => {
     if (d?.error) alert(d.error);
-    else if (d?.text) modal(d.text + (d.item ? `<hr>${itemHtml(d.item)}<button onclick='equipPending()'>替換此裝備</button>` : ''));
+    else if (d?.text) {
+      pendingItem = d.item || null;
+      modal(d.text + (d.item ? `<hr>${compareItemHtml(d.item)}` : ''));
+    }
     refresh();
   });
+  socket.on('chatStatus', d => { chatStatus = d || { guild: '' }; renderChatBox(); });
+  socket.on('chatHistory', d => {
+    if (!d?.channel) return;
+    chatMessages[d.channel] = d.messages || [];
+    renderChatBox();
+  });
+  socket.on('chatMessage', msg => {
+    const ch = msg?.channel === 'guild' ? 'guild' : 'global';
+    chatMessages[ch] = [...(chatMessages[ch] || []), msg].slice(-80);
+    renderChatBox(true);
+  });
+  socket.on('chatError', d => { addChatSystem(d?.message || '聊天室錯誤'); });
 }
 function addRealtimeLog(text) {
   const box = document.querySelector('#realtimeLog');
@@ -114,15 +144,18 @@ function addRealtimeLog(text) {
 function layout(content) {
   const p = me?.player;
   const s = me?.stats;
+  const expNeed = p ? p.level * 120 : 1;
   const header = token ? `<div class="panel hero-bar">
     <div>${img(meta.classes[p.classKey].image, 'avatar-sm', meta.classes[p.classKey].name)}</div>
-    <div class="hero-stats"><b>${esc(me.user.username)}</b>｜${esc(meta.classes[p.classKey].name)} Lv.${p.level}｜金幣 ${p.gold}｜碎片 ${p.bossFragments}
+    <div class="hero-stats"><b>${esc(me.user.username)}</b>｜${esc(meta.classes[p.classKey].name)} Lv.${p.level}｜EXP ${p.exp}/${expNeed}｜金幣 ${p.gold}｜碎片 ${p.bossFragments}
       <div class="bar"><i style="width:${Math.max(0, p.hp / s.hpMax * 100)}%"></i></div><span class="small">HP ${p.hp}/${s.hpMax}</span>
+      <div class="bar exp"><i style="width:${Math.max(0, Math.min(100, p.exp / expNeed * 100))}%"></i></div><span class="small">EXP ${p.exp}/${expNeed}</span>
       <div class="bar stam"><i style="width:${p.stamina / 2}%"></i></div><span class="small">疲勞 ${p.stamina}/200，每小時 +25</span>
     </div>
   </div>
   <div class="nav">${Object.keys(names).map(x => `<button onclick="go('${x}')" class="${page === x ? 'active' : ''}">${pageIcon(x)}${names[x]}</button>`).join('')}<button onclick="logout()">登出</button></div>` : '';
-  return `<div class="wrap"><div class="title">🏦 金融王國：Formosa Ledger Online</div>${header}${content}<div class="footer">8-bit 金融 RPG｜PostgreSQL + Socket.IO｜自訂像素素材已整合</div></div>`;
+  const main = `<div class="wrap"><div class="title">🏦 金融王國：Formosa Ledger Online</div>${header}${content}<div class="footer">8-bit 金融 RPG｜PostgreSQL + Socket.IO｜自訂像素素材已整合</div></div>`;
+  return token ? `<div class="game-shell"><main class="main-pane">${main}</main>${chatSidebar()}</div>` : main;
 }
 function authView() {
   const cls = Object.entries(meta.classes).map(([k, c]) => `<option value="${k}">${esc(c.name)}｜${esc(c.role)}</option>`).join('');
@@ -143,7 +176,7 @@ function render() {
   let c = '';
   if (page === 'home') {
     const cls = meta.classes[p.classKey];
-    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}</div></div>`).join('')}</div></div></div><div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
+    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}</div></div>`).join('')}</div></div></div><div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
   }
   if (page === 'training') {
     c = `<div class="card scene-card">${img('assets/images/scenes/grassland.png', 'scene-img', '練功場')}<div><h2>練功場：逾放怨靈沙洲</h2><p>練功只給經驗，不掉裝備。每次消耗疲勞 10，會跳出 3～5 句戰鬥敘述，包含技能、傷害、反擊與獎勵。</p>${img('assets/images/monsters/f01_skeleton.png', 'enemy-preview', '逾放怨靈')}<button onclick="act('/api/training')">進入小視窗戰鬥</button></div></div>`;
@@ -178,6 +211,7 @@ function render() {
     c = `<div class="card"><h2>裝備圖鑑</h2><p>伺服器已內建 6 職業 x 8 部位 x 50 件職業裝備。下方展示你職業的前 50 層武器。</p><div id="catalog">讀取中...</div></div>`;
   }
   $('#app').innerHTML = layout(c);
+  renderChatBox();
   if (page === 'boss') loadBoss();
   if (page === 'rank') loadRanks();
   if (page === 'catalog') loadCatalog();
@@ -231,14 +265,38 @@ async function act(url) {
 async function dungeon() {
   try {
     const j = await api('/api/dungeon', { method: 'POST', body: JSON.stringify({ floor: floor.value }) });
-    const extra = j.item ? `<hr><h3>獲得裝備</h3>${itemHtml(j.item)}<button onclick='equipPending()'>替換此裝備</button>` : '';
-    pendingItem = j.item;
+    pendingItem = j.item || null;
+    const extra = j.item ? `<hr><h3>獲得裝備，請比較後選擇</h3>${compareItemHtml(j.item)}` : '';
     modal(j.text + extra);
     await refresh();
   } catch (e) { alert(e.message); }
 }
-function itemHtml(it) {
-  return `<div class="loot-card">${img(itemImage(it), 'item-icon-lg', it.name)}<p><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>${esc(it.slot)}｜${esc(it.rarity)}｜攻${it.atk} 防${it.def} 專${it.focus}</p></div>`;
+function itemScore(it) {
+  if (!it) return 0;
+  return Number(it.atk || 0) * 1.2 + Number(it.def || 0) + Number(it.focus || 0) * 0.9 + Number(it.enhance || 0) * 6;
+}
+function statDiff(newIt, oldIt, key) {
+  const diff = Number(newIt?.[key] || 0) - Number(oldIt?.[key] || 0);
+  const label = key === 'atk' ? '攻' : key === 'def' ? '防' : '專';
+  const cls = diff > 0 ? 'ok' : diff < 0 ? 'danger' : 'small';
+  return `<span class="${cls}">${label}${newIt?.[key] || 0}（${diff >= 0 ? '+' : ''}${diff}）</span>`;
+}
+function itemHtml(it, title = '') {
+  if (!it) return `<div class="loot-card muted"><p>${esc(title || '空裝備欄')}</p></div>`;
+  return `<div class="loot-card">${img(itemImage(it), 'item-icon-lg', it.name)}<p>${title ? `<b>${esc(title)}</b><br>` : ''}<span class="rarity-${it.rarity}">${esc(it.name)}</span><br>${esc(it.slot)}｜${esc(it.rarity)}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance || 0}｜${esc(it.enchant || '未附魔')}｜${esc(it.spec || '未特化')}</p></div>`;
+}
+function compareItemHtml(newIt) {
+  const current = eqObj(me?.player?.equipment)[newIt.slot];
+  const delta = itemScore(newIt) - itemScore(current);
+  return `<div class="compare-grid">
+    <div>${itemHtml(current, `目前裝備：${newIt.slot}`)}</div>
+    <div>${itemHtml(newIt, '新獲得裝備')}</div>
+  </div>
+  <div class="compare-summary">
+    ${statDiff(newIt, current, 'atk')}　${statDiff(newIt, current, 'def')}　${statDiff(newIt, current, 'focus')}
+    <span class="${delta >= 0 ? 'ok' : 'danger'}">綜合評分 ${delta >= 0 ? '+' : ''}${Math.round(delta)}</span>
+  </div>
+  <div class="modal-actions"><button onclick="equipPending()">替換成新裝備</button><button onclick="this.closest('.modal').remove()">保留目前裝備</button></div>`;
 }
 async function equipPending() {
   if (!pendingItem) return;
@@ -254,7 +312,9 @@ async function forge(type) {
   await toast(await api('/api/' + type, { method: 'POST', body: JSON.stringify({ slot: slot.value, spec: specValue }) }));
 }
 async function joinGuild() {
-  await toast(await api('/api/guild', { method: 'POST', body: JSON.stringify({ guild: guild.value }) }));
+  const guildName = document.querySelector('#guild')?.value || '';
+  await toast(await api('/api/guild', { method: 'POST', body: JSON.stringify({ guild: guildName }) }));
+  if (socket?.connected) socket.emit('joinChat');
 }
 async function loadBoss() {
   const j = await api('/api/boss');
@@ -265,16 +325,16 @@ async function loadBoss() {
 async function bossAtk() {
   try {
     const j = await api('/api/boss/attack', { method: 'POST' });
-    pendingItem = j.item;
-    modal(j.text + (j.item ? `<hr>${itemHtml(j.item)}<button onclick='equipPending()'>替換此裝備</button>` : ''));
+    pendingItem = j.item || null;
+    modal(j.text + (j.item ? `<hr>${compareItemHtml(j.item)}` : ''));
     await refresh();
   } catch (e) { alert(e.message); }
 }
 async function craftBoss() {
   try {
     const j = await api('/api/boss/craft', { method: 'POST' });
-    pendingItem = j.item;
-    modal(j.message + itemHtml(j.item) + `<button onclick='equipPending()'>替換此裝備</button>`);
+    pendingItem = j.item || null;
+    modal(j.message + (j.item ? compareItemHtml(j.item) : ''));
     await refresh();
   } catch (e) { alert(e.message); }
 }
@@ -345,6 +405,49 @@ function socketArenaAtk() {
   connectSocket();
   socket.emit('joinBattle', { battleId: 'arena' });
   socket.emit('arenaStrike', { target: '金融影武者' });
+}
+
+function chatSidebar() {
+  const guild = chatStatus.guild || me?.player?.guild || '';
+  return `<aside class="chat-sidebar">
+    <div class="chat-title">即時聊天室</div>
+    <div class="chat-tabs">
+      <button class="${chatChannel === 'global' ? 'active' : ''}" onclick="setChatChannel('global')">大眾</button>
+      <button class="${chatChannel === 'guild' ? 'active' : ''}" onclick="setChatChannel('guild')">公會${guild ? `｜${esc(guild)}` : ''}</button>
+    </div>
+    <div id="chatMessages" class="chat-messages"></div>
+    <div class="chat-input-row"><input id="chatInput" maxlength="160" placeholder="輸入訊息，Enter 送出" onkeydown="if(event.key==='Enter')sendChat()"><button onclick="sendChat()">送出</button></div>
+    <p class="small">大眾頻道全服可見；公會頻道僅同公會玩家可見。</p>
+  </aside>`;
+}
+function renderChatBox(scrollBottom = false) {
+  const box = document.querySelector('#chatMessages');
+  if (!box) return;
+  const guild = chatStatus.guild || me?.player?.guild || '';
+  if (chatChannel === 'guild' && !guild) {
+    box.innerHTML = `<p class="small">尚未加入公會。請先到「公會/攻城」建立或加入公會後，再使用公會聊天室。</p>`;
+    return;
+  }
+  const rows = (chatMessages[chatChannel] || []).slice(-50);
+  box.innerHTML = rows.length ? rows.map(m => `<div class="chat-msg"><span class="chat-time">${new Date(Number(m.at || Date.now())).toLocaleTimeString()}</span> <b>${esc(m.username || '玩家')}</b><br>${esc(m.text || '')}</div>`).join('') : `<p class="small">目前沒有訊息，成為第一位發言的玩家吧。</p>`;
+  if (scrollBottom) box.scrollTop = box.scrollHeight;
+}
+function setChatChannel(ch) {
+  chatChannel = ch === 'guild' ? 'guild' : 'global';
+  localStorage.chatChannel = chatChannel;
+  render();
+}
+function addChatSystem(text) {
+  chatMessages[chatChannel] = [...(chatMessages[chatChannel] || []), { username: '系統', text, at: Date.now(), channel: chatChannel }].slice(-80);
+  renderChatBox(true);
+}
+function sendChat() {
+  const input = document.querySelector('#chatInput');
+  const text = input?.value?.trim();
+  if (!text) return;
+  connectSocket();
+  socket.emit('chatSend', { channel: chatChannel, text });
+  input.value = '';
 }
 
 boot();
