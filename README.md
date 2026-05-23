@@ -1,9 +1,15 @@
-# 金融王國：Formosa Ledger Online - PostgreSQL + Socket.IO + 自訂像素素材版
+# 金融王國：Formosa Ledger Online - v1.4 PostgreSQL + Socket.IO + 自訂像素素材版
 
-這是早期網頁 RPG 風格的台灣金融業題材 MVP。此版本已把使用者提供的 8-bit 素材切圖後整合到遊戲介面，並新增每日任務題庫。
+這是早期網頁 RPG 風格的台灣金融業題材 MVP。v1.4 延續 PostgreSQL、Socket.IO、8-bit 素材與每日任務，並強化排行榜、地下城難度、裝備級別與 PK 紀錄同步。
 
 ## 本版新增內容
 
+- V1.4：排行榜改為動態表格介面，等級、金幣與 BOSS 傷害更容易閱讀。
+- V1.4：地下城上限擴充為 100 層，深層敵方 HP、防禦與反擊會隨層數明顯提升。
+- V1.4：每個職業、每個裝備部位改為 100 件裝備，並新增卓越、遠古、祕寶、星鑄等級別。
+- V1.4：新增 `public/assets/images/equipment/classes/` 職業專屬裝備圖，總計 4,200 張像素裝備圖。
+- V1.4：世界 BOSS 與 PK 競技場前端只保留單一玩家行動按鈕，不再顯示 Socket/API 程式語言式名稱。
+- V1.4：PK 競技場結果會同時寫入發起方與被挑戰方的近期戰鬥紀錄。
 - `public/assets/images/`：已放入職業、BOSS、裝備、道具、怪物、UI、場景等像素圖片。
 - 角色與 BOSS 頁面改用圖片，不再只用 emoji。
 - 戰鬥訊息改為 3～5 句敘述，包含戰鬥過程、技能、傷害、反擊與獎勵。
@@ -77,6 +83,7 @@ classes/      職業角色圖
 bosses/       世界 BOSS 圖
 monsters/     地下城怪物圖
 equipment/    裝備圖示
+equipment/classes/ 職業專屬 100 階裝備圖
 items/        商店道具圖示
 ui/           導覽與 UI 圖示
 scenes/       場景圖

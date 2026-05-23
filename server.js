@@ -144,8 +144,30 @@ const CLASSES = {
 };
 
 const SLOTS = ['頭', '衣服', '褲子', '鞋子', '武器', '副武器', '飾品一', '飾品二'];
-const RARITIES = ['普通', '精良', '稀有', '史詩', '傳說', '神話'];
+const DUNGEON_MAX_FLOOR = 100;
+const EQUIPMENT_LEVEL_CAP = 100;
+const EQUIPMENT_ASSET_COUNT = 100;
+const RARITIES = ['普通', '精良', '稀有', '卓越', '史詩', '傳說', '遠古', '神話', '祕寶', '星鑄'];
 const ARMOR_SLOTS = ['頭', '衣服', '褲子', '鞋子'];
+const SLOT_ASSET_SLUGS = {
+  頭: 'heads',
+  衣服: 'clothes',
+  褲子: 'pants',
+  鞋子: 'shoes',
+  武器: 'weapons',
+  副武器: 'offhands',
+  飾品一: 'accessories',
+  飾品二: 'accessories'
+};
+const SLOT_FILE_PREFIXES = {
+  heads: 'head',
+  clothes: 'clothes',
+  pants: 'pants',
+  shoes: 'shoes',
+  weapons: 'weapon',
+  offhands: 'offhand',
+  accessories: 'accessory'
+};
 const BOSS_BASE_HP = 60000;
 const BOSS_HP_MULTIPLIER = 20;
 const BOSS_MAX_HP = BOSS_BASE_HP * BOSS_HP_MULTIPLIER;
@@ -200,7 +222,12 @@ const DUNGEON_MONSTERS = [
   { min: 11, max: 20, name: '逾放骷髏會計', image: 'assets/images/monsters/f11_skeleton.png' },
   { min: 21, max: 30, name: '黑箱稽核守衛', image: 'assets/images/monsters/f21_guard.png' },
   { min: 31, max: 40, name: '監理暗影騎士', image: 'assets/images/monsters/f31_knight.png' },
-  { min: 41, max: 50, name: '終局清算惡魔', image: 'assets/images/monsters/f41_finalfiend.png' }
+  { min: 41, max: 50, name: '終局清算惡魔', image: 'assets/images/monsters/f41_finalfiend.png' },
+  { min: 51, max: 60, name: '壓力測試魔像', image: 'assets/images/monsters/f21_golem.png' },
+  { min: 61, max: 70, name: '資安黑曜法師', image: 'assets/images/monsters/f31_firemage.png' },
+  { min: 71, max: 80, name: '流動性骨獸', image: 'assets/images/monsters/f31_bonebeast.png' },
+  { min: 81, max: 90, name: '市場深淵龍', image: 'assets/images/monsters/f41_darkdragon.png' },
+  { min: 91, max: 100, name: '百層監理魔王', image: 'assets/images/monsters/f41_balrog.png' }
 ];
 
 const QUIZ_QUESTIONS = [
@@ -408,24 +435,21 @@ function pick(arr) { return arr[rand(arr.length)]; }
 function safeText(v) { return String(v ?? '').replace(/[<>&]/g, '').trim().slice(0, 40); }
 function safeChatText(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 160); }
 function safeGuildName(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16); }
-function rarityForLevel(level) { return RARITIES[Math.min(5, Math.floor((level - 1) / 10))]; }
+function rarityForLevel(level) { return RARITIES[Math.min(RARITIES.length - 1, Math.floor((Number(level || 1) - 1) / 10))]; }
 function hashInt(s) {
   return parseInt(crypto.createHash('sha256').update(s).digest('hex').slice(0, 8), 16);
 }
-function padAsset(n) { return String(n).padStart(2, '0'); }
+function padAsset(n) { return String(n).padStart(3, '0'); }
 function imageIndex(level, clsKey, max, salt = '') {
   return ((Number(level || 1) + hashInt(`${salt}:${clsKey}`)) % max) + 1;
 }
 function assetForItem(slot, level, clsKey = 'risk_guardian', boss = false) {
-  const lvl = Number(level || 1);
-  if (slot === '武器') return `assets/images/equipment/weapons/weapon_${padAsset(imageIndex(lvl, clsKey, 16, 'weapon'))}.png`;
-  if (slot === '副武器') return `assets/images/equipment/weapons/weapon_${padAsset(imageIndex(lvl + 7, clsKey, 16, 'offhand'))}.png`;
-  if (slot.includes('飾品')) return `assets/images/equipment/accessories/accessory_${padAsset(imageIndex(lvl, clsKey, 8, 'accessory'))}.png`;
-  if (slot === '頭') return `assets/images/equipment/heads/head_${padAsset(imageIndex(lvl, clsKey, 8, 'head'))}.png`;
-  if (slot === '衣服') return `assets/images/equipment/clothes/clothes_${padAsset(imageIndex(lvl, clsKey, 8, 'clothes'))}.png`;
-  if (slot === '褲子') return `assets/images/equipment/pants/pants_${padAsset(imageIndex(lvl, clsKey, 8, 'pants'))}.png`;
-  if (slot === '鞋子') return `assets/images/equipment/shoes/shoes_${padAsset(imageIndex(lvl, clsKey, 8, 'shoes'))}.png`;
-  return `assets/images/equipment/clothes/clothes_${padAsset(imageIndex(lvl, clsKey, 8, 'fallback'))}.png`;
+  const lvl = Math.max(1, Math.min(EQUIPMENT_LEVEL_CAP, Number(level || 1)));
+  const safeCls = CLASSES[clsKey] ? clsKey : 'risk_guardian';
+  const slug = SLOT_ASSET_SLUGS[slot] || 'clothes';
+  const prefix = SLOT_FILE_PREFIXES[slug] || 'clothes';
+  const idx = ((lvl - 1 + (boss ? 13 : 0)) % EQUIPMENT_ASSET_COUNT) + 1;
+  return `assets/images/equipment/classes/${safeCls}/${slug}/${prefix}_${padAsset(idx)}.png`;
 }
 function normalizeEquipmentImages(eq, clsKey) {
   const out = eq || {};
@@ -435,7 +459,8 @@ function normalizeEquipmentImages(eq, clsKey) {
     if (!it) continue;
     const expected = assetForItem(slot, it.level || 1, it.clsKey || clsKey, it.rarity === 'BOSS神鑄');
     const mustFixArmorSlot = ARMOR_SLOTS.includes(slot) && (!it.image || String(it.image).includes('/armor/') || String(it.image).includes('armor_'));
-    if (!it.image || mustFixArmorSlot) {
+    const oldGenericIcon = it.image && !String(it.image).includes('/equipment/classes/');
+    if (!it.image || mustFixArmorSlot || oldGenericIcon) {
       it.image = expected;
       changed = true;
     }
@@ -445,13 +470,15 @@ function normalizeEquipmentImages(eq, clsKey) {
 function itemFor(clsKey, slot, level, boss = false) {
   const c = CLASSES[clsKey] || CLASSES.risk_guardian;
   const rare = boss ? 'BOSS神鑄' : rarityForLevel(level);
-  const base = level * 3 + (boss ? 80 : 0);
+  const lvl = Math.max(1, Math.min(EQUIPMENT_LEVEL_CAP, Number(level || 1)));
+  const tier = Math.min(RARITIES.length - 1, Math.floor((lvl - 1) / 10));
+  const base = lvl * 2.8 + tier * 18 + (boss ? 120 : 0);
   return {
     clsKey,
     slot,
-    level,
+    level: lvl,
     rarity: rare,
-    name: `${c.name}${boss ? '・世界王' : '・第' + level + '層'}${slot}`,
+    name: `${c.name}${boss ? '・世界王' : '・第' + lvl + '層'}${slot}`,
     atk: Math.round(base * (slot.includes('武器') ? 1.5 : 0.35)),
     def: Math.round(base * (ARMOR_SLOTS.includes(slot) ? 0.9 : 0.25)),
     focus: Math.round(base * (slot.includes('飾品') || slot === '副武器' ? 1.1 : 0.3)),
@@ -683,6 +710,9 @@ app.get('/api/meta', (req, res) => res.json({
   shop: SHOP,
   bosses: BOSSES,
   dungeonMonsters: DUNGEON_MONSTERS,
+  dungeonMaxFloor: DUNGEON_MAX_FLOOR,
+  equipmentLevelCap: EQUIPMENT_LEVEL_CAP,
+  rarities: RARITIES,
   fatigue: { max: 200, regenPerHour: 25, costs: { training: 10, dungeon: 18, arena: 15, guildWar: 30, boss: 25, dailyQuiz: 0 } },
   bossSettings: { baseHp: BOSS_BASE_HP, hpMultiplier: BOSS_HP_MULTIPLIER, maxHp: BOSS_MAX_HP, fragmentDropRate: BOSS_FRAGMENT_DROP_RATE }
 }));
@@ -742,25 +772,25 @@ app.post('/api/training', auth, async (req, res) => {
   res.json({ text });
 });
 app.post('/api/dungeon', auth, async (req, res) => {
-  const floor = Math.max(1, Math.min(50, Number(req.body.floor || 1)));
+  const floor = Math.max(1, Math.min(DUNGEON_MAX_FLOOR, Number(req.body.floor || 1)));
   const p = await getPlayer(req.user.id);
   if (!await spend(p, 18)) return res.status(400).json({ error: '疲勞不足' });
   const s = stats(p);
   const enemy = monsterForFloor(floor);
-  const enemyHp = 110 + floor * 35;
-  const enemyAtk = 18 + floor * 5;
-  const enemyDef = 8 + floor * 3;
+  const enemyHp = Math.round(100 + floor * 45 + Math.pow(floor, 2) * 1.1);
+  const enemyAtk = Math.round(22 + floor * 5 + Math.pow(floor, 1.3) * 1.8);
+  const enemyDef = Math.round(10 + floor * 4 + Math.pow(floor, 1.28) * 1.5);
   let hp = p.hp;
   let ehp = enemyHp;
   let totalDamage = 0;
   let totalTaken = 0;
   let lastSkill = skillFor(p.classkey);
-  for (let r = 1; r <= 6 && hp > 0 && ehp > 0; r++) {
+  for (let r = 1; r <= 8 && hp > 0 && ehp > 0; r++) {
     lastSkill = skillFor(p.classkey);
     const damage = Math.max(1, Math.round((s.atk + rand(s.focus + floor) + (lastSkill.focusBoost || 0)) * (lastSkill.power || 1)) - enemyDef);
     ehp -= damage;
     totalDamage += damage;
-    const rawTaken = ehp > 0 ? Math.max(0, enemyAtk + rand(floor * 2 + 8) - s.def) : 0;
+    const rawTaken = ehp > 0 ? Math.max(0, enemyAtk + rand(floor * 3 + 18) - Math.round(s.def * 0.85)) : 0;
     const taken = Math.max(0, Math.round(rawTaken * (1 - (lastSkill.guard || 0))));
     hp -= taken;
     totalTaken += taken;
@@ -772,23 +802,23 @@ app.post('/api/dungeon', auth, async (req, res) => {
   if (win) {
     const claim = await one('SELECT * FROM dungeon_claims WHERE playerId=$1 AND floor=$2', [p.id, floor]);
     if (!claim || now() - Number(claim.claimedat) > 259200000) {
-      gold = 120 + floor * 45;
+      gold = Math.round(120 + floor * 48 + Math.pow(floor, 1.25) * 18);
       await q('INSERT INTO dungeon_claims(playerId,floor,claimedAt) VALUES($1,$2,$3) ON CONFLICT(playerId,floor) DO UPDATE SET claimedAt=EXCLUDED.claimedAt', [p.id, floor, now()]);
       claimText = `金幣 ${gold} 已領取，該層金幣獎勵三天後可再次刷新。`;
     } else {
       claimText = '此層金幣獎勵仍在三天冷卻中，因此本次不重複給付金幣。';
     }
     item = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], floor);
-    await q('UPDATE players SET hp=$1, gold=gold+$2, dungeonSave=$3 WHERE id=$4', [Math.max(1, hp), gold, JSON.stringify({ floor: Math.min(50, floor + 1), hp: Math.max(1, hp) }), p.id]);
+    await q('UPDATE players SET hp=$1, gold=gold+$2, dungeonSave=$3 WHERE id=$4', [Math.max(1, hp), gold, JSON.stringify({ floor: Math.min(DUNGEON_MAX_FLOOR, floor + 1), hp: Math.max(1, hp) }), p.id]);
   } else {
     await q('UPDATE players SET hp=$1, dungeonSave=$2 WHERE id=$3', [Math.max(1, hp), JSON.stringify({ floor, hp: Math.max(1, hp) }), p.id]);
   }
   const text = combatNarrative({
     title: `地下城第 ${floor} 層：金融迷宮`, player: p, skill: lastSkill, target: enemy.name, damage: totalDamage, taken: totalTaken,
-    outcome: win ? `你在六回合內擊退「${enemy.name}」，通關後地下城存檔推進到第 ${Math.min(50, floor + 1)} 層。` : `「${enemy.name}」守住了本層，你被迫撤退，但系統已暫存第 ${floor} 層進度。`,
+    outcome: win ? `你在八回合內擊退「${enemy.name}」，通關後地下城存檔推進到第 ${Math.min(DUNGEON_MAX_FLOOR, floor + 1)} 層。` : `「${enemy.name}」守住了本層，你被迫撤退，但系統已暫存第 ${floor} 層進度。`,
     reward: win ? `${claimText}${item ? ` 同時發現一件 ${item.rarity} 裝備，可選擇是否替換。` : ''}` : '撤退後不會掉落裝備，建議先休息、補藥或強化裝備後再來。',
     image: enemy.image,
-    extra: [`累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`]
+    extra: [`V1.4 深層難度已啟用：本層敵方 HP ${enemyHp}、攻擊 ${enemyAtk}、防禦 ${enemyDef}，累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`]
   });
   await log(p.id, 'dungeon', text);
   res.json({ win, text, item });
@@ -878,7 +908,14 @@ app.post('/api/arena', auth, async (req, res) => {
     reward: `本場獲得 ${gold} 金幣；PK 會消耗疲勞但不會掉落裝備。`,
     image: (CLASSES[opp.classkey] || CLASSES.risk_guardian).image
   });
+  const opponentText = combatNarrative({
+    title: 'PK 競技場防衛通知', player: opp, skill: oppSkill, target: safeText(p.username), damage: taken, taken: damage,
+    outcome: win ? `${safeText(p.username)} 向你發起競技場挑戰，對方以 ${damage} 對 ${taken} 的攻勢取得勝利。` : `${safeText(p.username)} 向你發起競技場挑戰，你以 ${taken} 對 ${damage} 的反擊守住本場對戰。`,
+    reward: '這筆紀錄由對方發起 PK 後同步寫入，不會消耗你的疲勞，也不會扣除金幣。',
+    image: (CLASSES[p.classkey] || CLASSES.risk_guardian).image
+  });
   await log(p.id, 'arena', text);
+  await log(opp.id, 'arena-defense', opponentText);
   res.json({ text });
 });
 app.post('/api/guild', auth, async (req, res) => {
@@ -914,7 +951,7 @@ app.get('/api/boss', auth, async (req, res) => {
   const day = todayKey();
   const idx = bossIndex();
   const b = await ensureBoss();
-  res.json({ state: b, boss: BOSSES[idx], leaderboard: await all('SELECT u.username,bd.damage FROM boss_damage bd JOIN players p ON p.id=bd.playerId JOIN users u ON u.id=p.userId WHERE bd.day=$1 ORDER BY bd.damage DESC LIMIT 20', [day]) });
+  res.json({ state: b, boss: BOSSES[idx], leaderboard: await all('SELECT u.username,bd.damage,p.classKey AS "classKey" FROM boss_damage bd JOIN players p ON p.id=bd.playerId JOIN users u ON u.id=p.userId WHERE bd.day=$1 ORDER BY bd.damage DESC LIMIT 20', [day]) });
 });
 app.post('/api/boss/attack', auth, async (req, res) => {
   const result = await performBossAttack(req.user.id);
@@ -923,7 +960,7 @@ app.post('/api/boss/attack', auth, async (req, res) => {
 app.post('/api/boss/craft', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   if (p.bossfragments < 30) return res.status(400).json({ error: '碎片不足 30' });
-  const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], 50, true);
+  const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], EQUIPMENT_LEVEL_CAP, true);
   const bi = BOSSES[bossIndex()];
   it.name = `${bi[2]}・${it.slot}`;
   await q('UPDATE players SET bossFragments=bossFragments-30 WHERE id=$1', [p.id]);
@@ -974,16 +1011,16 @@ app.post('/api/daily-quiz/submit', auth, async (req, res) => {
 });
 app.get('/api/leaderboards', async (req, res) => {
   res.json({
-    level: await all('SELECT u.username,p.level,p.classKey FROM players p JOIN users u ON u.id=p.userId ORDER BY p.level DESC,p.exp DESC LIMIT 20'),
-    gold: await all('SELECT u.username,p.gold,p.classKey FROM players p JOIN users u ON u.id=p.userId ORDER BY p.gold DESC LIMIT 20'),
-    boss: await all('SELECT u.username,bd.damage FROM boss_damage bd JOIN players p ON p.id=bd.playerId JOIN users u ON u.id=p.userId WHERE bd.day=$1 ORDER BY bd.damage DESC LIMIT 20', [todayKey()])
+    level: await all('SELECT u.username,p.level,p.exp,p.classKey AS "classKey" FROM players p JOIN users u ON u.id=p.userId ORDER BY p.level DESC,p.exp DESC LIMIT 20'),
+    gold: await all('SELECT u.username,p.gold,p.level,p.classKey AS "classKey" FROM players p JOIN users u ON u.id=p.userId ORDER BY p.gold DESC,p.level DESC LIMIT 20'),
+    boss: await all('SELECT u.username,bd.damage,p.classKey AS "classKey" FROM boss_damage bd JOIN players p ON p.id=bd.playerId JOIN users u ON u.id=p.userId WHERE bd.day=$1 ORDER BY bd.damage DESC LIMIT 20', [todayKey()])
   });
 });
 app.get('/api/catalog', (req, res) => {
   const out = {};
   Object.keys(CLASSES).forEach(c => {
     out[c] = {};
-    SLOTS.forEach(s => { out[c][s] = Array.from({ length: 50 }, (_, i) => itemFor(c, s, i + 1)); });
+    SLOTS.forEach(s => { out[c][s] = Array.from({ length: EQUIPMENT_LEVEL_CAP }, (_, i) => itemFor(c, s, i + 1)); });
   });
   res.json(out);
 });
@@ -1004,7 +1041,7 @@ async function performBossAttack(userId) {
   await q('INSERT INTO boss_damage(day,playerId,damage) VALUES($1,$2,$3) ON CONFLICT(day,playerId) DO UPDATE SET damage=EXCLUDED.damage', [todayKey(), p.id, (old?.damage || 0) + damage]);
   let body;
   if (Math.random() < 0.04 || hp <= 0) {
-    const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], 50, true);
+    const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], EQUIPMENT_LEVEL_CAP, true);
     it.name = `${bi[2]}・${it.slot}`;
     body = {
       text: combatNarrative({

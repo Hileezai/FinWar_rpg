@@ -8,6 +8,8 @@ let socket = null;
 let chatChannel = localStorage.chatChannel || 'global';
 let chatMessages = { global: [], guild: [] };
 let chatStatus = { guild: '' };
+const FALLBACK_DUNGEON_MAX_FLOOR = 100;
+const FALLBACK_EQUIPMENT_LEVEL_CAP = 100;
 
 const names = {
   home: '角色',
@@ -63,7 +65,6 @@ function localSlotAsset(it) {
 }
 function itemImage(it) {
   if (!it) return 'assets/images/equipment/clothes/clothes_01.png';
-  if (['頭', '衣服', '褲子', '鞋子'].includes(it.slot)) return localSlotAsset(it);
   if (it?.image) return it.image;
   return localSlotAsset(it);
 }
@@ -154,7 +155,7 @@ function layout(content) {
     </div>
   </div>
   <div class="nav">${Object.keys(names).map(x => `<button onclick="go('${x}')" class="${page === x ? 'active' : ''}">${pageIcon(x)}${names[x]}</button>`).join('')}<button onclick="logout()">登出</button></div>` : '';
-  const main = `<div class="wrap"><div class="title">🏦 金融王國：Formosa Ledger Online</div>${header}${content}<div class="footer">8-bit 金融 RPG｜PostgreSQL + Socket.IO｜自訂像素素材已整合</div></div>`;
+  const main = `<div class="wrap"><div class="title">🌳 巨樹王國：Kingdom of Giant Tree Online</div>${header}${content}<div class="footer">金融故事像素風格網頁RPG</div></div>`;
   return token ? `<div class="game-shell"><main class="main-pane">${main}</main>${chatSidebar()}</div>` : main;
 }
 function authView() {
@@ -183,14 +184,15 @@ function render() {
   }
   if (page === 'dungeon') {
     const saved = eqObj(p.dungeonSave).floor || 1;
-    const preview = monsterForFloor(saved);
-    c = `<div class="card scene-card">${img('assets/images/scenes/cave.png', 'scene-img', '地下城')}<div><h2>地下城 50 層：金融迷宮</h2><p>每次消耗疲勞 18。裝備只從地下城與 BOSS 取得；每層金幣獎勵三天刷新一次，可暫存進度。</p><label>挑戰層數</label><input id="floor" type="number" min="1" max="50" value="${saved}"><div>${img(preview?.image, 'enemy-preview', preview?.name)}<span class="pill">目前預覽：${esc(preview?.name || '')}</span></div><button onclick="dungeon()">挑戰/讀取存檔層數</button><details><summary>查看 50 層故事</summary><div class="small storybox">${story()}</div></details></div></div>`;
+    const maxFloor = meta.dungeonMaxFloor || FALLBACK_DUNGEON_MAX_FLOOR;
+    const preview = monsterForFloor(Math.min(saved, maxFloor));
+    c = `<div class="card scene-card">${img('assets/images/scenes/cave.png', 'scene-img', '地下城')}<div><h2>地下城 ${maxFloor} 層：金融迷宮</h2><p>每次消耗疲勞 18。V1.4 已改為深層難度曲線，敵方 HP、防禦與反擊會隨層數有感提升。</p><label>挑戰層數</label><input id="floor" type="number" min="1" max="${maxFloor}" value="${Math.min(saved, maxFloor)}"><div>${img(preview?.image, 'enemy-preview', preview?.name)}<span class="pill">目前預覽：${esc(preview?.name || '')}</span></div><button onclick="dungeon()">挑戰/讀取存檔層數</button><details><summary>查看 ${maxFloor} 層故事</summary><div class="small storybox">${story(maxFloor)}</div></details></div></div>`;
   }
   if (page === 'boss') {
-    c = `<div class="card"><h2>世界 BOSS</h2><div id="bossbox">讀取中...</div><button onclick="joinRealtimeBoss()">加入即時 BOSS 房</button><button onclick="socketBossAtk()">Socket 即時攻擊</button><button onclick="bossAtk()">API 參戰，消耗疲勞 25</button><div class="log" id="realtimeLog"></div><button onclick="craftBoss()">30 碎片合成 BOSS 裝備</button></div>`;
+    c = `<div class="card"><h2>世界 BOSS</h2><div id="bossbox">讀取中...</div><button class="primary-action" onclick="bossAtk()">${pageIcon('arena')}討伐世界 BOSS，消耗疲勞 25</button><div class="log" id="realtimeLog"></div><button onclick="craftBoss()">30 碎片合成 BOSS 裝備</button></div>`;
   }
   if (page === 'arena') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/prison.png', 'scene-img', '競技場')}<div><h2>玩家對戰競技場</h2><p>自動匹配其他玩家鏡像資料。每次消耗疲勞 15，勝敗依攻防專注、技能與亂數判定。</p><button onclick="joinArena()">加入即時競技場</button><button onclick="socketArenaAtk()">Socket 即時攻擊</button><button onclick="act('/api/arena')">API 尋找對手 PK</button><div class="log" id="realtimeLog"></div></div></div>`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/prison.png', 'scene-img', '競技場')}<div><h2>玩家對戰競技場</h2><p>自動匹配其他玩家資料。每次消耗疲勞 15，勝敗依攻防專注、技能與亂數判定；對戰結果會同步寫入雙方近期戰鬥紀錄。</p><button class="primary-action" onclick="arenaFight()">${pageIcon('arena')}尋找對手開戰</button><div class="log" id="realtimeLog"></div></div></div>`;
   }
   if (page === 'guild') {
     c = `<div class="card scene-card">${img('assets/images/scenes/castle.png', 'scene-img', '公會城鎮')}<div><h2>公會與攻城戰</h2><input id="guild" placeholder="公會名稱" value="${esc(p.guild || '')}"><button onclick="joinGuild()">加入/創立公會</button><p>攻城戰每日可多次參與但每次消耗疲勞 30，目標為金控王城清算門。</p><button onclick="act('/api/guild-war')">參與攻城戰</button></div></div>`;
@@ -208,7 +210,8 @@ function render() {
     c = `<div class="card"><h2>排行榜</h2><div id="ranks">讀取中...</div></div>`;
   }
   if (page === 'catalog') {
-    c = `<div class="card"><h2>裝備圖鑑</h2><p>伺服器已內建 6 職業 x 8 部位 x 50 件職業裝備。下方展示你職業的前 50 層武器。</p><div id="catalog">讀取中...</div></div>`;
+    const cap = meta.equipmentLevelCap || FALLBACK_EQUIPMENT_LEVEL_CAP;
+    c = `<div class="card"><h2>裝備圖鑑</h2><p>伺服器已內建 6 職業 x 8 部位 x ${cap} 件職業裝備，並新增更多稀有級別。下方展示你職業的 ${cap} 件武器。</p><div id="catalog">讀取中...</div></div>`;
   }
   $('#app').innerHTML = layout(c);
   renderChatBox();
@@ -217,8 +220,9 @@ function render() {
   if (page === 'catalog') loadCatalog();
   if (page === 'daily') loadDailyQuiz();
 }
-function story() {
-  return Array.from({ length: 50 }, (_, i) => `第${i + 1}層：${['金庫荒廢區調查異常提款', 'ATM墓園掃蕩卡片怨靈', '利率鐘塔校準殖利率齒輪', '法遵圖書館封印裁罰卷宗', '董事會深淵對抗黑箱決策'][i % 5]}。`).join('<br>');
+function story(maxFloor = FALLBACK_DUNGEON_MAX_FLOOR) {
+  const scenes = ['金庫荒廢區調查異常提款', 'ATM墓園掃蕩卡片怨靈', '利率鐘塔校準殖利率齒輪', '法遵圖書館封印裁罰卷宗', '董事會深淵對抗黑箱決策', '壓力測試迴廊承受極端情境', '資安防火牆塔追捕異常封包', '洗防暗河追蹤分層金流', '市場閃崩橋修復斷裂K線', '百層清算門面對監理魔王'];
+  return Array.from({ length: maxFloor }, (_, i) => `第${i + 1}層：${scenes[i % scenes.length]}。`).join('<br>');
 }
 async function login() {
   try {
@@ -296,7 +300,10 @@ function compareItemHtml(newIt) {
     ${statDiff(newIt, current, 'atk')}　${statDiff(newIt, current, 'def')}　${statDiff(newIt, current, 'focus')}
     <span class="${delta >= 0 ? 'ok' : 'danger'}">綜合評分 ${delta >= 0 ? '+' : ''}${Math.round(delta)}</span>
   </div>
-  <div class="modal-actions"><button onclick="equipPending()">替換成新裝備</button><button onclick="this.closest('.modal').remove()">保留目前裝備</button></div>`;
+  <div class="modal-actions">
+    <button class="equip-action equip-new" onclick="equipPending()"><span class="action-icon icon-equip"></span>替換成新裝備</button>
+    <button class="equip-action keep-current" onclick="this.closest('.modal').remove()"><span class="action-icon icon-keep"></span>保留目前裝備</button>
+  </div>`;
 }
 async function equipPending() {
   if (!pendingItem) return;
@@ -320,7 +327,8 @@ async function loadBoss() {
   const j = await api('/api/boss');
   const bh = bossHp(j.state);
   const boss = j.boss;
-  bossbox.innerHTML = `<div class="boss-head">${img(boss[4], 'boss-img', boss[1])}<div><h3>${esc(boss[1])}｜${esc(boss[2])}</h3><p>${esc(boss[5])}</p><div class="bar"><i style="width:${Math.max(0, bh.hp / bh.max * 100)}%"></i></div><p>HP ${bh.hp}/${bh.max} ${bh.killed ? '已擊退' : ''}</p></div></div><h4>今日傷害榜</h4>${j.leaderboard.map(x => `<p>${esc(x.username)}：${x.damage}</p>`).join('')}`;
+  const board = (j.leaderboard || []).map(r => ({ ...r, className: meta.classes?.[r.classKey || r.classkey]?.name || r.classKey || r.classkey || '-' }));
+  bossbox.innerHTML = `<div class="boss-head">${img(boss[4], 'boss-img', boss[1])}<div><h3>${esc(boss[1])}｜${esc(boss[2])}</h3><p>${esc(boss[5])}</p><div class="bar"><i style="width:${Math.max(0, bh.hp / bh.max * 100)}%"></i></div><p>HP ${bh.hp}/${bh.max} ${bh.killed ? '已擊退' : ''}</p></div></div><h4>今日傷害榜</h4>${rankTable('', board, [{ key: 'username', label: '玩家' }, { key: 'className', label: '職業' }, { key: 'damage', label: '累積傷害', align: 'num' }], 'compact')}`;
 }
 async function bossAtk() {
   try {
@@ -329,6 +337,9 @@ async function bossAtk() {
     modal(j.text + (j.item ? `<hr>${compareItemHtml(j.item)}` : ''));
     await refresh();
   } catch (e) { alert(e.message); }
+}
+async function arenaFight() {
+  await act('/api/arena');
 }
 async function craftBoss() {
   try {
@@ -369,7 +380,18 @@ async function submitDailyQuiz() {
 }
 async function loadRanks() {
   const j = await api('/api/leaderboards');
-  ranks.innerHTML = ['level', 'gold', 'boss'].map(k => `<h3>${k}</h3>${j[k].map((x, i) => `<p>#${i + 1} ${esc(x.username)} ${x.level ? 'Lv.' + x.level : ''} ${x.gold ? '金幣 ' + x.gold : ''} ${x.damage ? '傷害 ' + x.damage : ''}</p>`).join('')}`).join('');
+  const withClass = rows => (rows || []).map(r => ({ ...r, className: meta.classes?.[r.classKey || r.classkey]?.name || r.classKey || r.classkey || '-' }));
+  ranks.innerHTML = `<div class="rank-board">
+    ${rankTable('等級排行', withClass(j.level), [{ key: 'username', label: '玩家' }, { key: 'className', label: '職業' }, { key: 'level', label: '等級', align: 'num' }, { key: 'exp', label: '目前 EXP', align: 'num' }])}
+    ${rankTable('金幣排行', withClass(j.gold), [{ key: 'username', label: '玩家' }, { key: 'className', label: '職業' }, { key: 'gold', label: '金幣', align: 'num' }, { key: 'level', label: '等級', align: 'num' }])}
+    ${rankTable('今日 BOSS 傷害排行', withClass(j.boss), [{ key: 'username', label: '玩家' }, { key: 'className', label: '職業' }, { key: 'damage', label: '累積傷害', align: 'num' }])}
+  </div>`;
+}
+function rankTable(title, rows, cols, variant = '') {
+  const body = rows.length
+    ? rows.map((row, i) => `<tr><td data-label="名次"><span class="rank-badge">#${i + 1}</span></td>${cols.map(col => `<td data-label="${esc(col.label)}" class="${col.align === 'num' ? 'num' : ''}">${esc(row[col.key] ?? '-')}</td>`).join('')}</tr>`).join('')
+    : `<tr><td colspan="${cols.length + 1}" class="small">目前尚無資料</td></tr>`;
+  return `<section class="rank-section ${variant}">${title ? `<h3>${esc(title)}</h3>` : ''}<div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>名次</th>${cols.map(col => `<th>${esc(col.label)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 async function loadCatalog() {
   const j = await api('/api/catalog');
