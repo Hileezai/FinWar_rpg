@@ -8,6 +8,7 @@ import pg from 'pg';
 import http from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
@@ -31,6 +32,20 @@ const pool = new Pool({
 const q = (text, params = []) => pool.query(text, params);
 const one = async (text, params = []) => (await q(text, params)).rows[0] || null;
 const all = async (text, params = []) => (await q(text, params)).rows;
+async function transaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work((text, params = []) => client.query(text, params));
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
 
 const CLASSES = {
   credit_alchemist: {
@@ -171,8 +186,38 @@ const SLOT_FILE_PREFIXES = {
 const BOSS_BASE_HP = 60000;
 const BOSS_HP_MULTIPLIER = 20;
 const BOSS_MAX_HP = BOSS_BASE_HP * BOSS_HP_MULTIPLIER;
-const BOSS_FRAGMENT_DROP_RATE = 0.55;
-const BOSS_FRAGMENT_BONUS_DROP_RATE = 0.1;
+const DUNGEON_EQUIPMENT_DROP_RATE = 0.7;
+const BOSS_EQUIPMENT_DROP_RATE = 0.028;
+const BOSS_FRAGMENT_DROP_RATE = 0.385;
+const BOSS_FRAGMENT_BONUS_DROP_RATE = 0.07;
+const MAX_ENHANCE = 10;
+const ENHANCE_SUCCESS_RATES = [0, 0.95, 0.86, 0.76, 0.64, 0.52, 0.42, 0.28, 0.18, 0.11, 0.06];
+const HP_REGEN_INTERVAL = 10 * 60 * 1000;
+const GUILD_RENAME_COOLDOWN = 7 * 24 * 60 * 60 * 1000;
+const GUILD_ROLES = {
+  leader: { label: '會長', power: 4 },
+  vice: { label: '副會長', power: 3 },
+  officer: { label: '幹部', power: 2 },
+  member: { label: '公會成員', power: 1 }
+};
+const onlineUsers = new Map();
+
+const ENCHANTS = [
+  { name: '反擊符文', desc: '受到攻擊時有機率反擊', effects: { counter: 0.05 } },
+  { name: '影步符文', desc: '提升迴避率', effects: { evasion: 0.06 } },
+  { name: '尋寶符文', desc: '提升地下城與 BOSS 掉寶判定', effects: { dropRate: 0.08 } },
+  { name: '碎晶符文', desc: '提升 BOSS 碎片掉落判定', effects: { bossFragment: 0.07 } },
+  { name: '續戰符文', desc: '提升每 10 分鐘自動 HP 回復量', effects: { hpRegenBonus: 0.12 } },
+  { name: '技能共鳴', desc: '提升技能傷害', effects: { skillDamage: 0.07 } },
+  { name: '金庫祝福', desc: '提升金幣獎勵', effects: { goldBonus: 0.06 } }
+];
+
+const SPECIALIZATIONS = {
+  攻擊特化: { desc: '攻擊增加、防禦降低', atkRate: 0.15, defRate: -0.08, effects: {} },
+  防禦特化: { desc: '防禦增加、攻擊降低', atkRate: -0.08, defRate: 0.15, effects: {} },
+  HP特化: { desc: 'HP 量增加、迴避率降低', atkRate: 0, defRate: 0, focusRate: 0, effects: { hpBonus: 0.1, evasion: -0.04 } },
+  專注特化: { desc: '專注、技能施放與技能傷害提升，攻防少量降低', atkRate: -0.05, defRate: -0.05, focusRate: 0.15, effects: { skillRate: 0.08, skillDamage: 0.05 } }
+};
 
 const SHOP = [
   ['小型紅利藥水', 'potion_hp_s', 120, '恢復 60 HP', 5, 'assets/images/items/potion_hp_s.png'],
@@ -229,6 +274,30 @@ const DUNGEON_MONSTERS = [
   { min: 81, max: 90, name: '市場深淵龍', image: 'assets/images/monsters/f41_darkdragon.png' },
   { min: 91, max: 100, name: '百層監理魔王', image: 'assets/images/monsters/f41_balrog.png' }
 ];
+
+function publicAssetPath(v) {
+  return String(v || '').replace(/\\/g, '/').replace(/^public\//, '');
+}
+function loadMapMonsterManifest() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'public', 'assets', 'data', 'map_monster_manifest.json'), 'utf8');
+    const data = JSON.parse(raw);
+    const maps = (data.maps || []).map((map) => ({
+      ...map,
+      previewPath: publicAssetPath(map.previewPath),
+      scenePath: publicAssetPath(map.scenePath),
+      monsters: (map.monsters || []).map((monster) => ({
+        ...monster,
+        assetPath: publicAssetPath(monster.assetPath)
+      }))
+    }));
+    return { ...data, maps };
+  } catch (e) {
+    console.warn('V1.5 map monster manifest not found, training ground will use fallback art.');
+    return { version: 'fallback', maps: [] };
+  }
+}
+const MAP_MONSTER_MANIFEST = loadMapMonsterManifest();
 
 const QUIZ_QUESTIONS = [
   {
@@ -435,9 +504,102 @@ function pick(arr) { return arr[rand(arr.length)]; }
 function safeText(v) { return String(v ?? '').replace(/[<>&]/g, '').trim().slice(0, 40); }
 function safeChatText(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 160); }
 function safeGuildName(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16); }
+function safeGuildNotice(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180); }
+function clamp(n, min, max) { return Math.max(min, Math.min(max, Number(n) || 0)); }
 function rarityForLevel(level) { return RARITIES[Math.min(RARITIES.length - 1, Math.floor((Number(level || 1) - 1) / 10))]; }
 function hashInt(s) {
   return parseInt(crypto.createHash('sha256').update(s).digest('hex').slice(0, 8), 16);
+}
+function dungeonWeekKey() {
+  const d = taipeiNowDate();
+  const daysSinceFriday = (d.getDay() + 2) % 7;
+  d.setDate(d.getDate() - daysSinceFriday);
+  d.setHours(0, 0, 0, 0);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function guildCapacity(level = 1) {
+  return 20 + (Math.max(1, Number(level || 1)) - 1) * 10;
+}
+function guildUpgradeCost(level = 1) {
+  return Math.round(8000 * Math.pow(Math.max(1, Number(level || 1)), 1.65));
+}
+function guildRenameCost(level = 1) {
+  return 5000 + Math.max(1, Number(level || 1)) * 2500;
+}
+function rolePower(role) {
+  return GUILD_ROLES[role]?.power || 0;
+}
+function roleLabel(role) {
+  return GUILD_ROLES[role]?.label || '公會成員';
+}
+function mergeEffects(...items) {
+  const out = {};
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    for (const [key, value] of Object.entries(item)) out[key] = (out[key] || 0) + Number(value || 0);
+  }
+  return out;
+}
+function itemEffectBundle(it) {
+  if (!it) return {};
+  const legacy = (!it.enchantEffects && !it.specEffects) ? it.effects : {};
+  return mergeEffects(legacy, it.enchantEffects, it.specEffects);
+}
+function effectChance(value, cap = 0.45) {
+  return clamp(value, 0, cap);
+}
+function chanceWithEffects(base, effects = {}, key = 'dropRate', cap = 0.95) {
+  const bonus = Number(effects[key] || 0) + (key === 'bossFragment' ? Number(effects.dropRate || 0) * 0.35 : 0);
+  return clamp(base + bonus, 0, cap);
+}
+function focusRoll(s, extra = 20) {
+  return rand(Math.max(1, Math.round((s.focus || 0) + extra + Number(s.effects?.skillRate || 0) * 70)));
+}
+function skillPower(skill, s) {
+  return (skill.power || 1) * (1 + clamp(s.effects?.skillDamage || 0, 0, 0.6));
+}
+function resolveIncomingDamage(rawTaken, s, skill) {
+  let taken = Math.max(0, Math.round(rawTaken * (1 - (skill.guard || 0))));
+  const notes = [];
+  if (taken > 0 && Math.random() < effectChance(s.effects?.evasion || 0, 0.4)) {
+    taken = 0;
+    notes.push('影步符文觸發，本次反擊被你完全閃避。');
+  }
+  let counter = 0;
+  if (taken > 0 && Math.random() < effectChance(s.effects?.counter || 0, 0.35)) {
+    counter = Math.max(1, Math.round(((s.atk || 0) + (s.focus || 0)) * 0.24));
+    notes.push(`反擊符文觸發，追加 ${counter} 點反擊傷害。`);
+  }
+  return { taken, counter, notes };
+}
+function currentDungeonSave(player) {
+  const raw = typeof player.dungeonsave === 'string' ? JSON.parse(player.dungeonsave || '{}') : (player.dungeonsave || player.dungeonSave || {});
+  const key = dungeonWeekKey();
+  const floor = raw.weekKey === key ? clamp(raw.floor || 1, 1, DUNGEON_MAX_FLOOR) : 1;
+  return { floor, hp: Math.max(1, Number(raw.hp || player.hp || 1)), weekKey: key };
+}
+function trainingEncounter() {
+  const maps = MAP_MONSTER_MANIFEST.maps || [];
+  if (!maps.length) {
+    return {
+      title: '練功場：逾放怨靈沙洲',
+      mapName: '逾放怨靈沙洲',
+      scene: 'assets/images/scenes/grassland.png',
+      monsterName: '逾放怨靈',
+      monsterImage: 'assets/images/monsters/f01_skeleton.png'
+    };
+  }
+  const map = pick(maps);
+  const monster = pick(map.monsters || []);
+  return {
+    title: `練功場：${map.name}`,
+    mapName: map.name,
+    scene: map.scenePath || map.previewPath,
+    monsterName: monster?.name || '未知魔物',
+    monsterImage: monster?.assetPath || map.previewPath,
+    role: monster?.combatRole || '',
+    theme: map.theme || ''
+  };
 }
 function padAsset(n) { return String(n).padStart(3, '0'); }
 function imageIndex(level, clsKey, max, salt = '') {
@@ -488,16 +650,60 @@ function itemFor(clsKey, slot, level, boss = false) {
     image: assetForItem(slot, level, clsKey, boss)
   };
 }
+function enhanceCost(item, nextLevel) {
+  const levelCost = Math.round(Number(item.level || 1) * 18);
+  return 250 + nextLevel * nextLevel * 170 + levelCost;
+}
+function applyEnhanceStats(item, nextLevel) {
+  const main = item.slot?.includes('武器') ? 'atk' : ARMOR_SLOTS.includes(item.slot) ? 'def' : 'focus';
+  const step = Math.max(1, Math.round((Number(item.level || 1) * 0.85 + nextLevel * 2.4) * (nextLevel >= 7 ? 1.45 : nextLevel >= 4 ? 1.2 : 1)));
+  item[main] = Number(item[main] || 0) + step;
+  if (nextLevel >= 5) {
+    item.atk = Number(item.atk || 0) + Math.max(1, Math.round(step * 0.2));
+    item.def = Number(item.def || 0) + Math.max(1, Math.round(step * 0.2));
+    item.focus = Number(item.focus || 0) + Math.max(1, Math.round(step * 0.2));
+  }
+  item.enhance = nextLevel;
+  return { main, step };
+}
+function revertSpec(item) {
+  if (!item?.specMods) return;
+  for (const key of ['atk', 'def', 'focus']) {
+    item[key] = Number(item[key] || 0) - Number(item.specMods[key] || 0);
+  }
+  delete item.specMods;
+  delete item.specEffects;
+}
+function applySpecialization(item, spec) {
+  const rule = SPECIALIZATIONS[spec] || SPECIALIZATIONS['攻擊特化'];
+  revertSpec(item);
+  const mods = {
+    atk: Math.round(Number(item.atk || 0) * Number(rule.atkRate || 0)),
+    def: Math.round(Number(item.def || 0) * Number(rule.defRate || 0)),
+    focus: Math.round(Number(item.focus || 0) * Number(rule.focusRate || 0))
+  };
+  item.atk = Math.max(0, Number(item.atk || 0) + mods.atk);
+  item.def = Math.max(0, Number(item.def || 0) + mods.def);
+  item.focus = Math.max(0, Number(item.focus || 0) + mods.focus);
+  item.spec = spec;
+  item.specMods = mods;
+  item.specEffects = rule.effects || {};
+  item.specDesc = rule.desc;
+  return rule;
+}
 function stats(player) {
   const eq = typeof player.equipment === 'string' ? JSON.parse(player.equipment || '{}') : (player.equipment || {});
-  const s = { hpMax: player.hpmax, atk: player.atk, def: player.def, focus: player.focus };
+  const s = { hpMax: player.hpmax, atk: player.atk, def: player.def, focus: player.focus, effects: {} };
   Object.values(eq).forEach((it) => {
     if (!it) return;
-    const mult = 1 + (it.enhance || 0) * 0.04;
+    const mult = 1 + (it.enhance || 0) * 0.03;
     s.atk += Math.round((it.atk || 0) * mult);
     s.def += Math.round((it.def || 0) * mult);
     s.focus += Math.round((it.focus || 0) * mult);
+    s.effects = mergeEffects(s.effects, itemEffectBundle(it));
   });
+  if (s.effects.hpBonus) s.hpMax = Math.round(s.hpMax * (1 + clamp(s.effects.hpBonus, -0.5, 1.5)));
+  s.effects.evasion = clamp(s.effects.evasion || 0, -0.4, 0.4);
   return s;
 }
 function stamina(player) {
@@ -505,6 +711,16 @@ function stamina(player) {
   const regen = Math.floor(elapsed / 3600000 * 25);
   const val = Math.min(200, Number(player.stamina) + regen);
   return { val, at: regen > 0 ? now() : Number(player.staminaat) };
+}
+function hpRegen(player) {
+  const currentStats = stats(player);
+  const hpMax = currentStats.hpMax;
+  const at = Number(player.hpregenat || player.staminaat || now());
+  if (Number(player.hp) >= hpMax) return { hp: Math.min(Number(player.hp), hpMax), at };
+  const ticks = Math.floor(Math.max(0, now() - at) / HP_REGEN_INTERVAL);
+  if (ticks <= 0) return { hp: Number(player.hp), at };
+  const perTick = Math.max(4, Math.round(hpMax * 0.04 * (1 + clamp(currentStats.effects.hpRegenBonus || 0, 0, 1))));
+  return { hp: Math.min(hpMax, Number(player.hp) + ticks * perTick), at: now() };
 }
 function sign(user) {
   return jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '8h' });
@@ -514,6 +730,7 @@ function normalizePlayer(p) {
   p.userId = p.userid;
   p.hpMax = p.hpmax;
   p.staminaAt = Number(p.staminaat);
+  p.hpRegenAt = Number(p.hpregenat || p.staminaat || now());
   p.bossFragments = p.bossfragments;
   p.dungeonSave = p.dungeonsave;
   p.classKey = p.classkey;
@@ -596,6 +813,20 @@ async function getPlayer(uid) {
     await q('UPDATE players SET equipment=$1 WHERE id=$2', [JSON.stringify(fixed.equipment), p.id]);
     p.equipment = fixed.equipment;
   }
+  const hpTick = hpRegen(p);
+  if (hpTick.hp !== Number(p.hp) || hpTick.at !== p.hpRegenAt) {
+    await q('UPDATE players SET hp=$1, hpRegenAt=$2 WHERE id=$3', [hpTick.hp, hpTick.at, p.id]);
+    p.hp = hpTick.hp;
+    p.hpregenat = hpTick.at;
+    p.hpRegenAt = hpTick.at;
+  }
+  const save = currentDungeonSave(p);
+  const savedRaw = typeof p.dungeonsave === 'string' ? JSON.parse(p.dungeonsave || '{}') : (p.dungeonsave || {});
+  if (savedRaw.weekKey !== save.weekKey || Number(savedRaw.floor || 1) !== save.floor) {
+    await q('UPDATE players SET dungeonSave=$1 WHERE id=$2', [JSON.stringify(save), p.id]);
+    p.dungeonsave = save;
+    p.dungeonSave = save;
+  }
   return p;
 }
 async function spend(p, cost) {
@@ -638,16 +869,40 @@ async function seedQuizQuestions() {
 }
 async function initDb() {
   await q(`CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, passwordHash TEXT NOT NULL, createdAt BIGINT NOT NULL);
-CREATE TABLE IF NOT EXISTS players(id SERIAL PRIMARY KEY, userId INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE, classKey TEXT NOT NULL, level INTEGER NOT NULL, exp INTEGER NOT NULL, gold INTEGER NOT NULL, hp INTEGER NOT NULL, hpMax INTEGER NOT NULL, atk INTEGER NOT NULL, def INTEGER NOT NULL, focus INTEGER NOT NULL, stamina INTEGER NOT NULL, staminaAt BIGINT NOT NULL, equipment JSONB NOT NULL, dungeonSave JSONB NOT NULL, guild TEXT DEFAULT '', bossFragments INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS players(id SERIAL PRIMARY KEY, userId INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE, classKey TEXT NOT NULL, level INTEGER NOT NULL, exp INTEGER NOT NULL, gold INTEGER NOT NULL, hp INTEGER NOT NULL, hpMax INTEGER NOT NULL, atk INTEGER NOT NULL, def INTEGER NOT NULL, focus INTEGER NOT NULL, stamina INTEGER NOT NULL, staminaAt BIGINT NOT NULL, hpRegenAt BIGINT, equipment JSONB NOT NULL, dungeonSave JSONB NOT NULL, guild TEXT DEFAULT '', bossFragments INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS dungeon_claims(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, floor INTEGER, claimedAt BIGINT, PRIMARY KEY(playerId,floor));
+CREATE TABLE IF NOT EXISTS dungeon_weekly_claims(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, floor INTEGER, weekKey TEXT, claimedAt BIGINT, PRIMARY KEY(playerId,floor,weekKey));
 CREATE TABLE IF NOT EXISTS purchases(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, sku TEXT, day TEXT, qty INTEGER, PRIMARY KEY(playerId,sku,day));
 CREATE TABLE IF NOT EXISTS boss_state(day TEXT PRIMARY KEY, bossIdx INTEGER, hp INTEGER, maxHp INTEGER, killed INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS boss_damage(day TEXT, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, damage INTEGER, PRIMARY KEY(day,playerId));
-CREATE TABLE IF NOT EXISTS guilds(name TEXT PRIMARY KEY, ownerPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, createdAt BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS guilds(name TEXT PRIMARY KEY, ownerPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, createdAt BIGINT NOT NULL, level INTEGER DEFAULT 1, treasury INTEGER DEFAULT 0, notice TEXT DEFAULT '', renameAt BIGINT DEFAULT 0);
+CREATE TABLE IF NOT EXISTS guild_members(guildName TEXT REFERENCES guilds(name) ON DELETE CASCADE ON UPDATE CASCADE, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'member', joinedAt BIGINT NOT NULL, donated INTEGER DEFAULT 0, PRIMARY KEY(guildName,playerId));
+CREATE TABLE IF NOT EXISTS guild_applications(id SERIAL PRIMARY KEY, guildName TEXT REFERENCES guilds(name) ON DELETE CASCADE ON UPDATE CASCADE, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, message TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', createdAt BIGINT NOT NULL, decidedAt BIGINT, decidedBy INTEGER REFERENCES players(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS guild_logs(id SERIAL PRIMARY KEY, guildName TEXT REFERENCES guilds(name) ON DELETE CASCADE ON UPDATE CASCADE, actorPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, targetPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, action TEXT NOT NULL, text TEXT NOT NULL, createdAt BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat_messages(id SERIAL PRIMARY KEY, channel TEXT NOT NULL, guild TEXT DEFAULT '', userId INTEGER REFERENCES users(id) ON DELETE SET NULL, username TEXT NOT NULL, text TEXT NOT NULL, createdAt BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS battle_log(id SERIAL PRIMARY KEY, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, mode TEXT, text TEXT, createdAt BIGINT);
 CREATE TABLE IF NOT EXISTS quiz_questions(id TEXT PRIMARY KEY, category TEXT NOT NULL, question TEXT NOT NULL, options JSONB NOT NULL, answer INTEGER NOT NULL, explanation TEXT NOT NULL, source TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_quiz_attempts(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, day TEXT NOT NULL, questionIds JSONB NOT NULL, answers JSONB NOT NULL, score INTEGER NOT NULL, rewardExp INTEGER NOT NULL, rewardGold INTEGER NOT NULL, createdAt BIGINT NOT NULL, PRIMARY KEY(playerId,day));`);
+  await q(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hpRegenAt BIGINT;
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1;
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS treasury INTEGER DEFAULT 0;
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS notice TEXT DEFAULT '';
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS renameAt BIGINT DEFAULT 0;`);
+  await q('UPDATE players SET hpRegenAt=staminaAt WHERE hpRegenAt IS NULL');
+  await q(`INSERT INTO guilds(name,ownerPlayerId,createdAt,level,treasury,notice,renameAt)
+SELECT p.guild, MIN(p.id), $1, 1, 0, '', 0 FROM players p
+WHERE COALESCE(p.guild,'') <> ''
+GROUP BY p.guild
+ON CONFLICT(name) DO NOTHING`, [now()]);
+  await q(`INSERT INTO guild_members(guildName,playerId,role,joinedAt,donated)
+SELECT p.guild, p.id, CASE WHEN p.id=sub.ownerId THEN 'leader' ELSE 'member' END, $1, 0
+FROM players p
+JOIN (SELECT guild, MIN(id) AS ownerId FROM players WHERE COALESCE(guild,'') <> '' GROUP BY guild) sub ON sub.guild=p.guild
+WHERE COALESCE(p.guild,'') <> ''
+ON CONFLICT(guildName,playerId) DO NOTHING`, [now()]);
+  await q(`UPDATE guilds g SET ownerPlayerId=COALESCE(g.ownerPlayerId, sub.ownerId)
+FROM (SELECT guildName, MIN(playerId) AS ownerId FROM guild_members GROUP BY guildName) sub
+WHERE sub.guildName=g.name`);
   await seedQuizQuestions();
 }
 async function grantExpGold(player, expGain, goldGain) {
@@ -694,11 +949,108 @@ function publicQuestion(row, includeAnswer = false) {
   }
   return out;
 }
+function normalizeGuildMember(row) {
+  return row ? {
+    ...row,
+    playerId: row.playerId || row.playerid,
+    joinedAt: Number(row.joinedAt || row.joinedat || 0),
+    donated: Number(row.donated || 0),
+    roleLabel: roleLabel(row.role),
+    online: onlineUsers.has(String(row.playerId || row.playerid))
+  } : row;
+}
+async function getGuildMembership(playerId) {
+  const row = await one(`SELECT gm.guildName AS "guildName", gm.playerId AS "playerId", gm.role, gm.joinedAt AS "joinedAt", gm.donated,
+    g.name, g.ownerPlayerId AS "ownerPlayerId", g.level, g.treasury, g.notice, g.renameAt AS "renameAt", g.createdAt AS "createdAt"
+    FROM guild_members gm JOIN guilds g ON g.name=gm.guildName WHERE gm.playerId=$1`, [playerId]);
+  return normalizeGuildMember(row);
+}
+async function guildMemberCount(guildName) {
+  const row = await one('SELECT COUNT(*)::int AS count FROM guild_members WHERE guildName=$1', [guildName]);
+  return Number(row?.count || 0);
+}
+async function guildLog(guildName, actorPlayerId, action, text, targetPlayerId = null) {
+  await q('INSERT INTO guild_logs(guildName,actorPlayerId,targetPlayerId,action,text,createdAt) VALUES($1,$2,$3,$4,$5,$6)', [guildName, actorPlayerId, targetPlayerId, action, text, now()]);
+}
+async function guildPayload(playerId) {
+  const guilds = await all(`SELECT g.name, g.level, g.treasury, g.notice, g.createdAt AS "createdAt",
+    COUNT(gm.playerId)::int AS members
+    FROM guilds g LEFT JOIN guild_members gm ON gm.guildName=g.name
+    GROUP BY g.name,g.level,g.treasury,g.notice,g.createdAt
+    ORDER BY members DESC,g.createdAt DESC LIMIT 30`);
+  const membership = await getGuildMembership(playerId);
+  if (!membership) {
+    return {
+      guild: null,
+      guilds: guilds.map(g => ({ ...g, capacity: guildCapacity(g.level), members: Number(g.members || 0) }))
+    };
+  }
+  const guildName = membership.guildName;
+  const guild = await one('SELECT * FROM guilds WHERE name=$1', [guildName]);
+  const members = (await all(`SELECT gm.playerId AS "playerId", gm.role, gm.joinedAt AS "joinedAt", gm.donated,
+    u.username, p.classKey AS "classKey", p.level, p.hp, p.hpMax AS "hpMax"
+    FROM guild_members gm JOIN players p ON p.id=gm.playerId JOIN users u ON u.id=p.userId
+    WHERE gm.guildName=$1 ORDER BY
+    CASE gm.role WHEN 'leader' THEN 1 WHEN 'vice' THEN 2 WHEN 'officer' THEN 3 ELSE 4 END,
+    p.level DESC,u.username ASC`, [guildName])).map(normalizeGuildMember);
+  const applications = rolePower(membership.role) >= 2
+    ? await all(`SELECT ga.id, ga.guildName AS "guildName", ga.playerId AS "playerId", ga.message, ga.createdAt AS "createdAt",
+        u.username, p.classKey AS "classKey", p.level
+        FROM guild_applications ga JOIN players p ON p.id=ga.playerId JOIN users u ON u.id=p.userId
+        WHERE ga.guildName=$1 AND ga.status='pending' ORDER BY ga.createdAt ASC`, [guildName])
+    : [];
+  const logs = await all('SELECT action,text,createdAt FROM guild_logs WHERE guildName=$1 ORDER BY id DESC LIMIT 20', [guildName]);
+  const count = members.length;
+  return {
+    guild: {
+      name: guild.name,
+      level: Number(guild.level || 1),
+      treasury: Number(guild.treasury || 0),
+      notice: guild.notice || '',
+      renameAt: Number(guild.renameat || guild.renameAt || 0),
+      createdAt: Number(guild.createdat || guild.createdAt || 0),
+      members: count,
+      capacity: guildCapacity(guild.level),
+      upgradeCost: guildUpgradeCost(guild.level),
+      renameCost: guildRenameCost(guild.level),
+      renameReadyAt: Number(guild.renameat || guild.renameAt || 0) + GUILD_RENAME_COOLDOWN
+    },
+    userRole: membership.role,
+    userRoleLabel: roleLabel(membership.role),
+    members,
+    applications,
+    logs,
+    guilds: guilds.map(g => ({ ...g, capacity: guildCapacity(g.level), members: Number(g.members || 0) }))
+  };
+}
+function onlineSnapshot() {
+  return [...onlineUsers.values()].map(u => ({ username: u.username, connectedAt: u.connectedAt, count: u.count }));
+}
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
 io.use(socketAuth);
+function broadcastOnline() {
+  io.emit('onlineUsers', { users: onlineSnapshot() });
+}
+function markOnline(user) {
+  const key = String(user.id);
+  const current = onlineUsers.get(key) || { userId: user.id, username: safeText(user.username), connectedAt: now(), count: 0 };
+  current.count += 1;
+  current.username = safeText(user.username);
+  onlineUsers.set(key, current);
+  broadcastOnline();
+}
+function markOffline(user) {
+  const key = String(user.id);
+  const current = onlineUsers.get(key);
+  if (!current) return;
+  current.count -= 1;
+  if (current.count <= 0) onlineUsers.delete(key);
+  else onlineUsers.set(key, current);
+  broadcastOnline();
+}
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -710,11 +1062,15 @@ app.get('/api/meta', (req, res) => res.json({
   shop: SHOP,
   bosses: BOSSES,
   dungeonMonsters: DUNGEON_MONSTERS,
+  mapMonsters: MAP_MONSTER_MANIFEST,
   dungeonMaxFloor: DUNGEON_MAX_FLOOR,
   equipmentLevelCap: EQUIPMENT_LEVEL_CAP,
   rarities: RARITIES,
-  fatigue: { max: 200, regenPerHour: 25, costs: { training: 10, dungeon: 18, arena: 15, guildWar: 30, boss: 25, dailyQuiz: 0 } },
-  bossSettings: { baseHp: BOSS_BASE_HP, hpMultiplier: BOSS_HP_MULTIPLIER, maxHp: BOSS_MAX_HP, fragmentDropRate: BOSS_FRAGMENT_DROP_RATE }
+  fatigue: { max: 200, regenPerHour: 25, costs: { training: 10, dungeon: 18, arena: 15, guildWar: 0, boss: 25, dailyQuiz: 0 } },
+  bossSettings: { baseHp: BOSS_BASE_HP, hpMultiplier: BOSS_HP_MULTIPLIER, maxHp: BOSS_MAX_HP, fragmentDropRate: BOSS_FRAGMENT_DROP_RATE, equipmentDropRate: BOSS_EQUIPMENT_DROP_RATE },
+  dungeonSettings: { equipmentDropRate: DUNGEON_EQUIPMENT_DROP_RATE, rewardReset: '每週五 00:00（台北時間）' },
+  forgeSettings: { maxEnhance: MAX_ENHANCE, enhanceRates: ENHANCE_SUCCESS_RATES, enchants: ENCHANTS, specializations: SPECIALIZATIONS },
+  guildRoles: GUILD_ROLES
 }));
 app.post('/api/register', async (req, res) => {
   const { username, password, classKey } = req.body;
@@ -727,7 +1083,7 @@ app.post('/api/register', async (req, res) => {
     const c = CLASSES[classKey];
     const eq = {};
     SLOTS.forEach(s => { eq[s] = itemFor(classKey, s, 1); });
-    await q('INSERT INTO players(userId,classKey,level,exp,gold,hp,hpMax,atk,def,focus,stamina,staminaAt,equipment,dungeonSave,guild,bossFragments) VALUES($1,$2,1,0,1000,$3,$4,$5,$6,$7,200,$8,$9,$10,$11,0)', [u.id, classKey, c.hp, c.hp, c.atk, c.def, c.focus, now(), JSON.stringify(eq), JSON.stringify({ floor: 1, hp: c.hp }), '']);
+    await q('INSERT INTO players(userId,classKey,level,exp,gold,hp,hpMax,atk,def,focus,stamina,staminaAt,hpRegenAt,equipment,dungeonSave,guild,bossFragments) VALUES($1,$2,1,0,1000,$3,$4,$5,$6,$7,200,$8,$8,$9,$10,$11,0)', [u.id, classKey, c.hp, c.hp, c.atk, c.def, c.focus, now(), JSON.stringify(eq), JSON.stringify({ floor: 1, hp: c.hp, weekKey: dungeonWeekKey() }), '']);
     res.json({ token: sign(u), username });
   } catch (e) {
     res.status(400).json({ error: '帳號已存在或資料庫錯誤' });
@@ -743,55 +1099,80 @@ app.get('/api/me', auth, async (req, res) => {
   if (!p) return res.status(404).json({ error: '角色不存在' });
   res.json({ user: req.user, player: p, stats: stats(p), logs: await all('SELECT * FROM battle_log WHERE playerId=$1 ORDER BY id DESC LIMIT 20', [p.id]) });
 });
+app.get('/api/online', auth, (req, res) => {
+  res.json({ users: onlineSnapshot() });
+});
 app.post('/api/rest', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
-  const heal = Math.min(p.hpmax - p.hp, Math.round(p.hpmax * 0.35));
-  await q('UPDATE players SET hp=$1 WHERE id=$2', [p.hp + heal, p.id]);
-  res.json({ message: `你在分行休息室吃了帳務便當，櫃台妖精替你補齊水位，恢復 ${heal} HP。` });
+  const s = stats(p);
+  const missing = Math.max(0, s.hpMax - Number(p.hp));
+  if (missing <= 0) return res.json({ message: 'HP 已經是滿的，不需要休息。' });
+  const heal = Math.min(missing, Math.round(s.hpMax * 0.45));
+  const cost = Math.min(1500, Math.max(30, Math.round(heal * 1.8 + p.level * 25)));
+  if (p.gold < cost) {
+    return res.status(400).json({ error: `金幣不足，本次休息需要 ${cost} 金幣。沒有金幣時仍會每 10 分鐘自動回復少量 HP。` });
+  }
+  await q('UPDATE players SET hp=$1, gold=gold-$2, hpRegenAt=$3 WHERE id=$4', [p.hp + heal, cost, now(), p.id]);
+  res.json({ message: `你在分行休息室休整，花費 ${cost} 金幣並恢復 ${heal} HP。沒有金幣時也會每 10 分鐘自動回復少量 HP。` });
 });
 app.post('/api/training', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   if (!await spend(p, 10)) return res.status(400).json({ error: '疲勞不足' });
   const s = stats(p);
   const skill = skillFor(p.classkey);
+  const encounter = trainingEncounter();
   const mdef = 5 + p.level * 2;
-  const damage = Math.max(1, Math.round((s.atk + rand(s.focus + 8) + (skill.focusBoost || 0)) * (skill.power || 1)) - mdef);
+  const damage = Math.max(1, Math.round((s.atk + focusRoll(s, 8) + (skill.focusBoost || 0)) * skillPower(skill, s)) - mdef);
   const rawTaken = Math.max(0, 10 + p.level * 3 + rand(20) - s.def);
-  const taken = Math.max(0, Math.round(rawTaken * (1 - (skill.guard || 0))));
+  const resolved = resolveIncomingDamage(rawTaken, s, skill);
+  const taken = resolved.taken;
   const hp = Math.max(1, p.hp - taken);
   const expGain = 25 + p.level * 8 + rand(20);
   await q('UPDATE players SET hp=$1 WHERE id=$2', [hp, p.id]);
   const reward = await grantExpGold({ ...p, hp }, expGain, 0);
   const text = combatNarrative({
-    title: '練功場：逾放怨靈沙洲', player: p, skill, target: '逾放怨靈', damage, taken,
-    outcome: reward.levelUps ? `逾放怨靈被你的金融招式淨化，你獲得 ${expGain} EXP 並升到 Lv.${reward.level}。` : `逾放怨靈暫時退散，你獲得 ${expGain} EXP，目前經驗值為 ${reward.exp}/${reward.level * 120}。`,
+    title: encounter.title, player: p, skill, target: encounter.monsterName, damage, taken,
+    outcome: reward.levelUps ? `${encounter.monsterName} 被你的金融招式淨化，你獲得 ${expGain} EXP 並升到 Lv.${reward.level}。` : `${encounter.monsterName} 暫時退散，你獲得 ${expGain} EXP，目前經驗值為 ${reward.exp}/${reward.level * 120}。`,
     reward: '本區域只提供經驗值，不掉落裝備；若要裝備請挑戰地下城或世界 BOSS。',
-    image: 'assets/images/monsters/f01_skeleton.png'
+    image: encounter.monsterImage,
+    extra: [`本次隨機場景：${encounter.mapName}${encounter.theme ? `（${encounter.theme}）` : ''}。`, ...resolved.notes]
   });
   await log(p.id, 'training', text);
-  res.json({ text });
+  res.json({ text, encounter });
 });
 app.post('/api/dungeon', auth, async (req, res) => {
-  const floor = Math.max(1, Math.min(DUNGEON_MAX_FLOOR, Number(req.body.floor || 1)));
   const p = await getPlayer(req.user.id);
+  const save = currentDungeonSave(p);
+  const floor = save.floor;
+  const requested = req.body.floor ? Number(req.body.floor) : floor;
+  if (Number.isFinite(requested) && requested !== floor) {
+    return res.status(400).json({ error: `地下城每週五刷新後必須依序挑戰，目前只能挑戰第 ${floor} 層。` });
+  }
   if (!await spend(p, 18)) return res.status(400).json({ error: '疲勞不足' });
   const s = stats(p);
   const enemy = monsterForFloor(floor);
-  const enemyHp = Math.round(100 + floor * 45 + Math.pow(floor, 2) * 1.1);
-  const enemyAtk = Math.round(22 + floor * 5 + Math.pow(floor, 1.3) * 1.8);
-  const enemyDef = Math.round(10 + floor * 4 + Math.pow(floor, 1.28) * 1.5);
+  const enemyHp = Math.round(120 + floor * 55 + Math.pow(floor, 2) * 1.35);
+  const enemyAtk = Math.round(26 + floor * 5.8 + Math.pow(floor, 1.34) * 2.05);
+  const enemyDef = Math.round(12 + floor * 4.6 + Math.pow(floor, 1.3) * 1.75);
   let hp = p.hp;
   let ehp = enemyHp;
   let totalDamage = 0;
   let totalTaken = 0;
+  const effectNotes = [];
   let lastSkill = skillFor(p.classkey);
   for (let r = 1; r <= 8 && hp > 0 && ehp > 0; r++) {
     lastSkill = skillFor(p.classkey);
-    const damage = Math.max(1, Math.round((s.atk + rand(s.focus + floor) + (lastSkill.focusBoost || 0)) * (lastSkill.power || 1)) - enemyDef);
+    const damage = Math.max(1, Math.round((s.atk + focusRoll(s, floor) + (lastSkill.focusBoost || 0)) * skillPower(lastSkill, s)) - enemyDef);
     ehp -= damage;
     totalDamage += damage;
     const rawTaken = ehp > 0 ? Math.max(0, enemyAtk + rand(floor * 3 + 18) - Math.round(s.def * 0.85)) : 0;
-    const taken = Math.max(0, Math.round(rawTaken * (1 - (lastSkill.guard || 0))));
+    const resolved = resolveIncomingDamage(rawTaken, s, lastSkill);
+    const taken = resolved.taken;
+    if (resolved.counter) {
+      ehp -= resolved.counter;
+      totalDamage += resolved.counter;
+    }
+    effectNotes.push(...resolved.notes);
     hp -= taken;
     totalTaken += taken;
   }
@@ -800,28 +1181,31 @@ app.post('/api/dungeon', auth, async (req, res) => {
   let item = null;
   let claimText = '';
   if (win) {
-    const claim = await one('SELECT * FROM dungeon_claims WHERE playerId=$1 AND floor=$2', [p.id, floor]);
-    if (!claim || now() - Number(claim.claimedat) > 259200000) {
-      gold = Math.round(120 + floor * 48 + Math.pow(floor, 1.25) * 18);
-      await q('INSERT INTO dungeon_claims(playerId,floor,claimedAt) VALUES($1,$2,$3) ON CONFLICT(playerId,floor) DO UPDATE SET claimedAt=EXCLUDED.claimedAt', [p.id, floor, now()]);
-      claimText = `金幣 ${gold} 已領取，該層金幣獎勵三天後可再次刷新。`;
+    const claim = await one('SELECT * FROM dungeon_weekly_claims WHERE playerId=$1 AND floor=$2 AND weekKey=$3', [p.id, floor, save.weekKey]);
+    if (!claim) {
+      gold = Math.round((120 + floor * 48 + Math.pow(floor, 1.25) * 18) * (1 + clamp(s.effects?.goldBonus || 0, 0, 0.5)));
+      await q('INSERT INTO dungeon_weekly_claims(playerId,floor,weekKey,claimedAt) VALUES($1,$2,$3,$4) ON CONFLICT(playerId,floor,weekKey) DO NOTHING', [p.id, floor, save.weekKey, now()]);
+      claimText = `本週第 ${floor} 層獎勵金幣 ${gold} 已領取，下一次週五刷新後會從第 1 層重新開始。`;
     } else {
-      claimText = '此層金幣獎勵仍在三天冷卻中，因此本次不重複給付金幣。';
+      claimText = '本週已領過此層金幣獎勵，因此本次不重複給付金幣。';
     }
-    item = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], floor);
-    await q('UPDATE players SET hp=$1, gold=gold+$2, dungeonSave=$3 WHERE id=$4', [Math.max(1, hp), gold, JSON.stringify({ floor: Math.min(DUNGEON_MAX_FLOOR, floor + 1), hp: Math.max(1, hp) }), p.id]);
+    const itemChance = chanceWithEffects(DUNGEON_EQUIPMENT_DROP_RATE, s.effects);
+    if (Math.random() < itemChance) {
+      item = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], floor);
+    }
+    await q('UPDATE players SET hp=$1, gold=gold+$2, dungeonSave=$3 WHERE id=$4', [Math.max(1, hp), gold, JSON.stringify({ floor: Math.min(DUNGEON_MAX_FLOOR, floor + 1), hp: Math.max(1, hp), weekKey: save.weekKey }), p.id]);
   } else {
-    await q('UPDATE players SET hp=$1, dungeonSave=$2 WHERE id=$3', [Math.max(1, hp), JSON.stringify({ floor, hp: Math.max(1, hp) }), p.id]);
+    await q('UPDATE players SET hp=$1, dungeonSave=$2 WHERE id=$3', [Math.max(1, hp), JSON.stringify({ floor, hp: Math.max(1, hp), weekKey: save.weekKey }), p.id]);
   }
   const text = combatNarrative({
     title: `地下城第 ${floor} 層：金融迷宮`, player: p, skill: lastSkill, target: enemy.name, damage: totalDamage, taken: totalTaken,
     outcome: win ? `你在八回合內擊退「${enemy.name}」，通關後地下城存檔推進到第 ${Math.min(DUNGEON_MAX_FLOOR, floor + 1)} 層。` : `「${enemy.name}」守住了本層，你被迫撤退，但系統已暫存第 ${floor} 層進度。`,
-    reward: win ? `${claimText}${item ? ` 同時發現一件 ${item.rarity} 裝備，可選擇是否替換。` : ''}` : '撤退後不會掉落裝備，建議先休息、補藥或強化裝備後再來。',
+    reward: win ? `${claimText}${item ? ` 同時發現一件 ${item.rarity} 裝備，可選擇是否替換。` : ' 本次沒有發現裝備，地下城裝備掉落率已下修 30%。'}` : '撤退後不會掉落裝備，建議先休息、補藥或強化裝備後再來。',
     image: enemy.image,
-    extra: [`V1.4 深層難度已啟用：本層敵方 HP ${enemyHp}、攻擊 ${enemyAtk}、防禦 ${enemyDef}，累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`]
+    extra: [`V1.5 週五重置與深層難度已啟用：本層敵方 HP ${enemyHp}、攻擊 ${enemyAtk}、防禦 ${enemyDef}，累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`, ...effectNotes.slice(0, 2)]
   });
   await log(p.id, 'dungeon', text);
-  res.json({ win, text, item });
+  res.json({ win, text, item, nextFloor: win ? Math.min(DUNGEON_MAX_FLOOR, floor + 1) : floor, weekKey: save.weekKey });
 });
 app.post('/api/equip', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -838,25 +1222,30 @@ app.post('/api/enhance', auth, async (req, res) => {
   const slot = req.body.slot;
   const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
   if (!eq[slot]) return res.status(400).json({ error: '沒有此裝備' });
-  const price = 200 + (eq[slot].enhance || 0) * 180;
+  const current = Number(eq[slot].enhance || 0);
+  if (current >= MAX_ENHANCE) return res.status(400).json({ error: `此裝備已達最高強化 +${MAX_ENHANCE}` });
+  const next = current + 1;
+  const price = enhanceCost(eq[slot], next);
   if (p.gold < price) return res.status(400).json({ error: '金幣不足' });
-  const chance = Math.max(0.35, 0.9 - (eq[slot].enhance || 0) * 0.07);
+  const chance = ENHANCE_SUCCESS_RATES[next] || 0.05;
   const ok = Math.random() < chance;
-  if (ok) eq[slot].enhance = (eq[slot].enhance || 0) + 1;
+  const gain = ok ? applyEnhanceStats(eq[slot], next) : null;
   await q('UPDATE players SET gold=gold-$1, equipment=$2 WHERE id=$3', [price, JSON.stringify(eq), p.id]);
-  res.json({ message: ok ? `強化成功！${slot} +${eq[slot].enhance}` : `強化失敗，消耗 ${price} 金幣。` });
+  res.json({ message: ok ? `強化成功！${slot} +${next}，${gain.main === 'atk' ? '攻擊' : gain.main === 'def' ? '防禦' : '專注'}提升 ${gain.step}。` : `強化失敗，消耗 ${price} 金幣。+7～+10 區間成功率較低，請斟酌資源。` });
 });
 app.post('/api/enchant', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   const slot = req.body.slot;
-  const ench = ['風管屏障', '法遵聖光', '資安封包', '市場動能', '授信擔保', 'AML 追蹤'][rand(6)];
+  const ench = pick(ENCHANTS);
   const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
   if (!eq[slot]) return res.status(400).json({ error: '沒有此裝備' });
-  if (p.gold < 500) return res.status(400).json({ error: '金幣不足' });
-  eq[slot].enchant = ench;
-  eq[slot].focus += 8;
-  await q('UPDATE players SET gold=gold-500, equipment=$1 WHERE id=$2', [JSON.stringify(eq), p.id]);
-  res.json({ message: `附魔成功：${ench}` });
+  const price = 700 + Number(eq[slot].enhance || 0) * 90;
+  if (p.gold < price) return res.status(400).json({ error: '金幣不足' });
+  eq[slot].enchant = ench.name;
+  eq[slot].enchantDesc = ench.desc;
+  eq[slot].enchantEffects = ench.effects;
+  await q('UPDATE players SET gold=gold-$1, equipment=$2 WHERE id=$3', [price, JSON.stringify(eq), p.id]);
+  res.json({ message: `附魔成功：${ench.name}，${ench.desc}。` });
 });
 app.post('/api/specialize', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -864,13 +1253,11 @@ app.post('/api/specialize', auth, async (req, res) => {
   const spec = req.body.spec || '攻擊特化';
   const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
   if (!eq[slot]) return res.status(400).json({ error: '沒有此裝備' });
+  if (!SPECIALIZATIONS[spec]) return res.status(400).json({ error: '無此特化類型' });
   if (p.gold < 1200) return res.status(400).json({ error: '金幣不足' });
-  eq[slot].spec = spec;
-  if (spec.includes('攻')) eq[slot].atk += 18;
-  else if (spec.includes('防')) eq[slot].def += 18;
-  else eq[slot].focus += 18;
+  const rule = applySpecialization(eq[slot], spec);
   await q('UPDATE players SET gold=gold-1200, equipment=$1 WHERE id=$2', [JSON.stringify(eq), p.id]);
-  res.json({ message: `${slot} 已完成 ${spec}` });
+  res.json({ message: `${slot} 已完成 ${spec}：${rule.desc}。` });
 });
 app.post('/api/shop/buy', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -878,7 +1265,7 @@ app.post('/api/shop/buy', auth, async (req, res) => {
   if (!it) return res.status(404).json({ error: '無此商品' });
   const day = todayKey();
   const row = await one('SELECT qty FROM purchases WHERE playerId=$1 AND sku=$2 AND day=$3', [p.id, it[1], day]);
-  if ((row?.qty || 0) >= it[4]) return res.status(400).json({ error: '今日購買上限' });
+  if ((row?.qty || 0) >= it[4]) return res.status(400).json({ error: '已無庫存，請明天再來購買。' });
   if (p.gold < it[2]) return res.status(400).json({ error: '金幣不足' });
   let hp = p.hp;
   let staminaNow = p.stamina;
@@ -897,8 +1284,11 @@ app.post('/api/arena', auth, async (req, res) => {
   const b = stats(opp);
   const skill = skillFor(p.classkey);
   const oppSkill = skillFor(opp.classkey);
-  const damage = Math.max(1, Math.round((a.atk + rand(a.focus + 20) + (skill.focusBoost || 0)) * (skill.power || 1)) - b.def);
-  const taken = Math.max(1, Math.round((b.atk + rand(b.focus + 20) + (oppSkill.focusBoost || 0)) * (oppSkill.power || 1)) - a.def);
+  let damage = Math.max(1, Math.round((a.atk + focusRoll(a, 20) + (skill.focusBoost || 0)) * skillPower(skill, a)) - b.def);
+  const rawTaken = Math.max(1, Math.round((b.atk + focusRoll(b, 20) + (oppSkill.focusBoost || 0)) * skillPower(oppSkill, b)) - a.def);
+  const resolved = resolveIncomingDamage(rawTaken, a, skill);
+  const taken = resolved.taken;
+  damage += resolved.counter;
   const win = damage >= taken;
   const gold = win ? 80 : 20;
   await q('UPDATE players SET gold=gold+$1 WHERE id=$2', [gold, p.id]);
@@ -918,34 +1308,180 @@ app.post('/api/arena', auth, async (req, res) => {
   await log(opp.id, 'arena-defense', opponentText);
   res.json({ text });
 });
-app.post('/api/guild', auth, async (req, res) => {
-  const name = safeGuildName(req.body.guild || '');
+app.get('/api/guild', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   if (!p) return res.status(404).json({ error: '角色不存在' });
-  if (!name) {
-    await q('UPDATE players SET guild=$1 WHERE id=$2', ['', p.id]);
-    return res.json({ message: '已離開公會', guild: '' });
-  }
+  res.json(await guildPayload(p.id));
+});
+app.get('/api/guild/list', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  const payload = await guildPayload(p.id);
+  res.json({ guilds: payload.guilds });
+});
+app.post('/api/guild/create', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const name = safeGuildName(req.body.guild || req.body.name || '');
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  if (await getGuildMembership(p.id)) return res.status(400).json({ error: '你已經加入公會，需先退出才能創立新公會。' });
   if (name.length < 2) return res.status(400).json({ error: '公會名稱至少 2 個字，最多 16 個字。' });
-  await q('INSERT INTO guilds(name,ownerPlayerId,createdAt) VALUES($1,$2,$3) ON CONFLICT(name) DO NOTHING', [name, p.id, now()]);
+  if (await one('SELECT name FROM guilds WHERE name=$1', [name])) return res.status(400).json({ error: '此公會名稱已存在。' });
+  await q('INSERT INTO guilds(name,ownerPlayerId,createdAt,level,treasury,notice,renameAt) VALUES($1,$2,$3,1,0,$4,0)', [name, p.id, now(), '歡迎加入公會，請一起捐獻金庫、挑戰更高成長。']);
+  await q('INSERT INTO guild_members(guildName,playerId,role,joinedAt,donated) VALUES($1,$2,$3,$4,0)', [name, p.id, 'leader', now()]);
   await q('UPDATE players SET guild=$1 WHERE id=$2', [name, p.id]);
-  res.json({ message: `已加入/創立公會：${name}`, guild: name });
+  await guildLog(name, p.id, 'create', `${safeText(p.username)} 創立了公會。`);
+  res.json({ message: `已創立公會：${name}`, ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/apply', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const name = safeGuildName(req.body.guild || req.body.name || '');
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  if (await getGuildMembership(p.id)) return res.status(400).json({ error: '你已經加入公會。' });
+  const guild = await one('SELECT * FROM guilds WHERE name=$1', [name]);
+  if (!guild) return res.status(404).json({ error: '找不到此公會。' });
+  const exists = await one('SELECT id FROM guild_applications WHERE guildName=$1 AND playerId=$2 AND status=$3', [name, p.id, 'pending']);
+  if (exists) return res.status(400).json({ error: '你已送出申請，請等待審核。' });
+  await q('INSERT INTO guild_applications(guildName,playerId,message,status,createdAt) VALUES($1,$2,$3,$4,$5)', [name, p.id, safeChatText(req.body.message || ''), 'pending', now()]);
+  await guildLog(name, p.id, 'apply', `${safeText(p.username)} 送出入會申請。`, p.id);
+  res.json({ message: `已送出加入「${name}」的申請，等待幹部以上審核。` });
+});
+app.post('/api/guild/application', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  const decision = req.body.decision === 'reject' ? 'reject' : 'approve';
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (decision === 'approve' && rolePower(membership.role) < 2) return res.status(403).json({ error: '幹部以上才能同意申請。' });
+  if (decision === 'reject' && rolePower(membership.role) < 3) return res.status(403).json({ error: '只有會長或副會長可以拒絕申請。' });
+  const appRow = await one('SELECT * FROM guild_applications WHERE id=$1 AND status=$2', [Number(req.body.id), 'pending']);
+  if (!appRow || appRow.guildname !== membership.guildName) return res.status(404).json({ error: '找不到待審核申請。' });
+  if (decision === 'approve') {
+    if (await getGuildMembership(appRow.playerid)) return res.status(400).json({ error: '申請者已加入其他公會。' });
+    const count = await guildMemberCount(membership.guildName);
+    if (count >= guildCapacity(membership.level)) return res.status(400).json({ error: '公會人數已滿，請先用公會金庫升級公會等級。' });
+    await q('INSERT INTO guild_members(guildName,playerId,role,joinedAt,donated) VALUES($1,$2,$3,$4,0)', [membership.guildName, appRow.playerid, 'member', now()]);
+    await q('UPDATE players SET guild=$1 WHERE id=$2', [membership.guildName, appRow.playerid]);
+  }
+  await q('UPDATE guild_applications SET status=$1,decidedAt=$2,decidedBy=$3 WHERE id=$4', [decision === 'approve' ? 'approved' : 'rejected', now(), p.id, appRow.id]);
+  await guildLog(membership.guildName, p.id, decision, `${safeText(p.username)} ${decision === 'approve' ? '同意' : '拒絕'}了一筆入會申請。`, appRow.playerid);
+  res.json({ message: decision === 'approve' ? '已同意入會申請。' : '已拒絕入會申請。', ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/donate', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  const amount = Math.floor(Number(req.body.amount || 0));
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (amount <= 0) return res.status(400).json({ error: '捐獻金額需大於 0。' });
+  if (p.gold < amount) return res.status(400).json({ error: '金幣不足。' });
+  await q('UPDATE players SET gold=gold-$1 WHERE id=$2', [amount, p.id]);
+  await q('UPDATE guilds SET treasury=treasury+$1 WHERE name=$2', [amount, membership.guildName]);
+  await q('UPDATE guild_members SET donated=donated+$1 WHERE guildName=$2 AND playerId=$3', [amount, membership.guildName, p.id]);
+  await guildLog(membership.guildName, p.id, 'donate', `${safeText(p.username)} 捐獻 ${amount} 金幣到公會金庫。`);
+  res.json({ message: `已捐獻 ${amount} 金幣到公會金庫。`, ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/upgrade', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (rolePower(membership.role) < 3) return res.status(403).json({ error: '只有會長或副會長可以使用公會金庫升級。' });
+  const cost = guildUpgradeCost(membership.level);
+  if (Number(membership.treasury || 0) < cost) return res.status(400).json({ error: `公會金庫不足，升級需要 ${cost} 金幣。` });
+  await q('UPDATE guilds SET treasury=treasury-$1, level=level+1 WHERE name=$2', [cost, membership.guildName]);
+  await guildLog(membership.guildName, p.id, 'upgrade', `${safeText(p.username)} 使用金庫 ${cost} 金幣，將公會升到 Lv.${Number(membership.level) + 1}。`);
+  res.json({ message: `公會升級成功，成員上限增加 10。`, ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/rename', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  const name = safeGuildName(req.body.name || req.body.guild || '');
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (membership.role !== 'leader') return res.status(403).json({ error: '只有會長可以改名。' });
+  if (name.length < 2) return res.status(400).json({ error: '公會名稱至少 2 個字，最多 16 個字。' });
+  if (name === membership.guildName) return res.status(400).json({ error: '新名稱不可與目前相同。' });
+  if (await one('SELECT name FROM guilds WHERE name=$1', [name])) return res.status(400).json({ error: '此公會名稱已存在。' });
+  if (Number(membership.renameAt || 0) && now() - Number(membership.renameAt) < GUILD_RENAME_COOLDOWN) return res.status(400).json({ error: '公會改名冷卻中，冷卻時間為 7 天。' });
+  const cost = guildRenameCost(membership.level);
+  if (p.gold < cost) return res.status(400).json({ error: `金幣不足，改名需要 ${cost} 金幣。` });
+  const oldName = membership.guildName;
+  await transaction(async (tx) => {
+    await tx('UPDATE players SET gold=gold-$1 WHERE id=$2', [cost, p.id]);
+    await tx('UPDATE guilds SET name=$1, renameAt=$2 WHERE name=$3', [name, now(), oldName]);
+    await tx('UPDATE players SET guild=$1 WHERE guild=$2', [name, oldName]);
+    await tx('UPDATE chat_messages SET guild=$1 WHERE guild=$2', [name, oldName]);
+  });
+  await guildLog(name, p.id, 'rename', `${safeText(p.username)} 花費 ${cost} 金幣，將公會「${oldName}」改名為「${name}」。`);
+  res.json({ message: `公會已改名為：${name}`, ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/notice', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (rolePower(membership.role) < 3) return res.status(403).json({ error: '只有會長或副會長可以編輯公告。' });
+  const notice = safeGuildNotice(req.body.notice || '');
+  await q('UPDATE guilds SET notice=$1 WHERE name=$2', [notice, membership.guildName]);
+  await guildLog(membership.guildName, p.id, 'notice', `${safeText(p.username)} 更新了公會公告。`);
+  res.json({ message: '公會公告已更新。', ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/role', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  const targetId = Number(req.body.playerId);
+  const role = ['vice', 'officer', 'member'].includes(req.body.role) ? req.body.role : null;
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (!role) return res.status(400).json({ error: '無此職階。' });
+  const target = await one('SELECT * FROM guild_members WHERE guildName=$1 AND playerId=$2', [membership.guildName, targetId]);
+  if (!target) return res.status(404).json({ error: '找不到此公會成員。' });
+  if (target.role === 'leader') return res.status(403).json({ error: '不能變更會長職階。' });
+  if (membership.role !== 'leader' && !(membership.role === 'vice' && ['officer', 'member'].includes(role) && ['officer', 'member'].includes(target.role))) {
+    return res.status(403).json({ error: '只有會長可任命副會長；副會長僅能調整幹部與成員。' });
+  }
+  await q('UPDATE guild_members SET role=$1 WHERE guildName=$2 AND playerId=$3', [role, membership.guildName, targetId]);
+  await guildLog(membership.guildName, p.id, 'role', `${safeText(p.username)} 將成員職階調整為 ${roleLabel(role)}。`, targetId);
+  res.json({ message: '職階已更新。', ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/kick', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  const targetId = Number(req.body.playerId);
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  if (rolePower(membership.role) < 3) return res.status(403).json({ error: '只有會長或副會長可以踢人。' });
+  if (targetId === p.id) return res.status(400).json({ error: '請使用離開公會功能。' });
+  const target = await one('SELECT * FROM guild_members WHERE guildName=$1 AND playerId=$2', [membership.guildName, targetId]);
+  if (!target) return res.status(404).json({ error: '找不到此公會成員。' });
+  if (target.role === 'leader' || (membership.role === 'vice' && rolePower(target.role) >= 3)) return res.status(403).json({ error: '副會長不能踢除會長或其他副會長。' });
+  await q('DELETE FROM guild_members WHERE guildName=$1 AND playerId=$2', [membership.guildName, targetId]);
+  await q('UPDATE players SET guild=$1 WHERE id=$2', ['', targetId]);
+  await guildLog(membership.guildName, p.id, 'kick', `${safeText(p.username)} 將一名成員移出公會。`, targetId);
+  res.json({ message: '已將成員移出公會。', ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild/leave', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const membership = await getGuildMembership(p.id);
+  if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
+  const count = await guildMemberCount(membership.guildName);
+  if (membership.role === 'leader' && count > 1) return res.status(400).json({ error: '會長需先移交職位或移除其他成員後才能離開。' });
+  if (membership.role === 'leader') {
+    await q('DELETE FROM guilds WHERE name=$1', [membership.guildName]);
+    await q('UPDATE players SET guild=$1 WHERE id=$2', ['', p.id]);
+    return res.json({ message: '你已解散公會並離開。', ...(await guildPayload(p.id)) });
+  }
+  await guildLog(membership.guildName, p.id, 'leave', `${safeText(p.username)} 離開了公會。`);
+  await q('DELETE FROM guild_members WHERE guildName=$1 AND playerId=$2', [membership.guildName, p.id]);
+  await q('UPDATE players SET guild=$1 WHERE id=$2', ['', p.id]);
+  res.json({ message: '已離開公會。', ...(await guildPayload(p.id)) });
+});
+app.post('/api/guild', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const name = safeGuildName(req.body.guild || req.body.name || '');
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  if (!name) return res.status(400).json({ error: '請使用公會管理介面的離開公會按鈕。' });
+  if (await one('SELECT name FROM guilds WHERE name=$1', [name])) {
+    req.body.guild = name;
+    return res.status(400).json({ error: '此版本已改為申請審核制，請使用公會清單的申請按鈕送出入會申請。' });
+  }
+  return res.status(400).json({ error: '此版本需使用「創立公會」按鈕建立公會。' });
 });
 app.post('/api/guild-war', auth, async (req, res) => {
-  const p = await getPlayer(req.user.id);
-  if (!p.guild) return res.status(400).json({ error: '先加入公會' });
-  if (!await spend(p, 30)) return res.status(400).json({ error: '疲勞不足' });
-  const skill = skillFor(p.classkey);
-  const score = Math.round((stats(p).atk + stats(p).def + rand(80)) * (skill.power || 1));
-  const text = combatNarrative({
-    title: '攻城戰：金控王城清算門', player: p, skill, target: '清算門守衛', damage: score, taken: Math.max(0, rand(35) - stats(p).def),
-    outcome: `${safeText(p.guild)} 公會突襲清算門，你貢獻 ${score} 城牆破壞值。`,
-    reward: '攻城結果已即時推播到公會戰頻道，之後可再擴充成固定時段結算制。',
-    image: 'assets/images/scenes/castle.png'
-  });
-  await log(p.id, 'guild-war', text);
-  io.to('guild-war').emit('battleLog', { mode: 'guild-war', text, at: now() });
-  res.json({ text });
+  res.status(400).json({ error: '公會戰/攻城戰暫未開放，待後續版本更新。' });
 });
 app.get('/api/boss', auth, async (req, res) => {
   const day = todayKey();
@@ -1034,13 +1570,13 @@ async function performBossAttack(userId) {
   const s = stats(p);
   const skill = skillFor(p.classkey);
   const bi = BOSSES[bossIndex()];
-  const damage = Math.max(50, Math.round((s.atk * 6 + s.focus * 3 + (skill.focusBoost || 0) * 5 + rand(250)) * (skill.power || 1)));
+  const damage = Math.max(50, Math.round((s.atk * 6 + s.focus * 3 + (skill.focusBoost || 0) * 5 + focusRoll(s, 250)) * skillPower(skill, s)));
   const hp = Math.max(0, Number(b.hp) - damage);
   await q('UPDATE boss_state SET hp=$1, killed=$2 WHERE day=$3', [hp, hp <= 0 ? 1 : 0, todayKey()]);
   const old = await one('SELECT damage FROM boss_damage WHERE day=$1 AND playerId=$2', [todayKey(), p.id]);
   await q('INSERT INTO boss_damage(day,playerId,damage) VALUES($1,$2,$3) ON CONFLICT(day,playerId) DO UPDATE SET damage=EXCLUDED.damage', [todayKey(), p.id, (old?.damage || 0) + damage]);
   let body;
-  if (Math.random() < 0.04 || hp <= 0) {
+  if (Math.random() < chanceWithEffects(BOSS_EQUIPMENT_DROP_RATE, s.effects)) {
     const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], EQUIPMENT_LEVEL_CAP, true);
     it.name = `${bi[2]}・${it.slot}`;
     body = {
@@ -1057,8 +1593,8 @@ async function performBossAttack(userId) {
     };
   } else {
     let frag = 0;
-    if (Math.random() < BOSS_FRAGMENT_DROP_RATE) {
-      frag = 1 + (Math.random() < BOSS_FRAGMENT_BONUS_DROP_RATE ? 1 : 0);
+    if (Math.random() < chanceWithEffects(BOSS_FRAGMENT_DROP_RATE, s.effects, 'bossFragment', 0.85)) {
+      frag = 1 + (Math.random() < chanceWithEffects(BOSS_FRAGMENT_BONUS_DROP_RATE, s.effects, 'bossFragment', 0.35) ? 1 : 0);
       await q('UPDATE players SET bossFragments=bossFragments+$1 WHERE id=$2', [frag, p.id]);
     }
     body = {
@@ -1128,7 +1664,10 @@ async function handleChatSend(socket, payload = {}) {
 
 io.on('connection', async (socket) => {
   const username = socket.user.username;
+  markOnline(socket.user);
   socket.emit('battleLog', { mode: 'system', text: `${safeText(username)} 已連線即時戰鬥伺服器。`, at: now() });
+  socket.emit('onlineUsers', { users: onlineSnapshot() });
+  socket.on('disconnect', () => markOffline(socket.user));
   try { await syncChat(socket); } catch (e) { socket.emit('chatError', { message: '聊天室同步失敗，請重新整理頁面。' }); }
   socket.on('joinChat', async () => {
     try { await syncChat(socket); } catch (e) { socket.emit('chatError', { message: '聊天室同步失敗。' }); }
@@ -1137,7 +1676,7 @@ io.on('connection', async (socket) => {
     try { await handleChatSend(socket, payload); } catch (e) { socket.emit('chatError', { message: '訊息送出失敗。' }); }
   });
   socket.on('joinBattle', async ({ battleId } = {}) => {
-    const room = ['world-boss', 'guild-war', 'arena'].includes(battleId) ? battleId : 'arena';
+    const room = ['world-boss', 'arena'].includes(battleId) ? battleId : 'arena';
     socket.join(room);
     socket.to(room).emit('battleLog', { mode: room, text: `${safeText(username)} 進入 ${room} 戰場。`, at: now() });
     if (room === 'world-boss') {
@@ -1153,7 +1692,7 @@ io.on('connection', async (socket) => {
     const player = await getPlayer(socket.user.id);
     const s = stats(player);
     const skill = skillFor(player.classkey);
-    const damage = Math.max(1, Math.round((s.atk + rand(s.focus + 30) + (skill.focusBoost || 0)) * (skill.power || 1)));
+    const damage = Math.max(1, Math.round((s.atk + focusRoll(s, 30) + (skill.focusBoost || 0)) * skillPower(skill, s)));
     const text = combatNarrative({
       title: '即時競技場', player, skill, target: safeText(target), damage, taken: rand(20),
       outcome: `${safeText(username)} 的攻擊已同步給競技場房間內所有玩家。`,

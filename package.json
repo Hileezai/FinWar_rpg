@@ -1,7 +1,7 @@
 {
   "name": "finance-rpg-taiwan-pg-socket",
-  "version": "1.4.0",
-  "description": "8-bit Taiwan finance RPG with PostgreSQL, Socket.IO realtime battle, v1.4 dungeon balance, expanded equipment, daily quiz and realtime chat",
+  "version": "1.5.0",
+  "description": "8-bit Taiwan finance RPG with PostgreSQL, Socket.IO realtime battle, v1.5 guild management, weekly dungeon reset, forge effects and random training maps",
   "main": "server.js",
   "type": "module",
   "scripts": {

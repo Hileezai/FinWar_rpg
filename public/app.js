@@ -8,6 +8,8 @@ let socket = null;
 let chatChannel = localStorage.chatChannel || 'global';
 let chatMessages = { global: [], guild: [] };
 let chatStatus = { guild: '' };
+let onlineUsers = [];
+let guildState = null;
 const FALLBACK_DUNGEON_MAX_FLOOR = 100;
 const FALLBACK_EQUIPMENT_LEVEL_CAP = 100;
 
@@ -17,7 +19,7 @@ const names = {
   dungeon: '地下城',
   boss: '世界BOSS',
   arena: 'PK競技場',
-  guild: '公會/攻城',
+  guild: '公會',
   daily: '每日任務',
   shop: '道具商店',
   forge: '強化附魔',
@@ -137,6 +139,10 @@ function connectSocket() {
     renderChatBox(true);
   });
   socket.on('chatError', d => { addChatSystem(d?.message || '聊天室錯誤'); });
+  socket.on('onlineUsers', d => {
+    onlineUsers = d?.users || d || [];
+    renderOnlinePanel();
+  });
 }
 function addRealtimeLog(text) {
   const box = document.querySelector('#realtimeLog');
@@ -156,7 +162,15 @@ function layout(content) {
   </div>
   <div class="nav">${Object.keys(names).map(x => `<button onclick="go('${x}')" class="${page === x ? 'active' : ''}">${pageIcon(x)}${names[x]}</button>`).join('')}<button onclick="logout()">登出</button></div>` : '';
   const main = `<div class="wrap"><div class="title">🌳 巨樹王國：Kingdom of Giant Tree Online</div>${header}${content}<div class="footer">金融故事像素風格網頁RPG</div></div>`;
-  return token ? `<div class="game-shell"><main class="main-pane">${main}</main>${chatSidebar()}</div>` : main;
+  return token ? `<div class="game-shell"><main class="main-pane">${main}</main>${chatSidebar()}</div>${onlinePanel()}` : main;
+}
+function onlinePanel() {
+  return `<section class="online-panel"><b>目前線上玩家</b><div id="onlineUsers">${onlineUsers.length ? onlineUsers.map(u => `<span class="pill">${esc(u.username || '玩家')}${u.count > 1 ? ` x${u.count}` : ''}</span>`).join('') : '<span class="small">尚未同步線上名單</span>'}</div></section>`;
+}
+function renderOnlinePanel() {
+  const box = document.querySelector('#onlineUsers');
+  if (!box) return;
+  box.innerHTML = onlineUsers.length ? onlineUsers.map(u => `<span class="pill">${esc(u.username || '玩家')}${u.count > 1 ? ` x${u.count}` : ''}</span>`).join('') : '<span class="small">目前沒有其他線上玩家</span>';
 }
 function authView() {
   const cls = Object.entries(meta.classes).map(([k, c]) => `<option value="${k}">${esc(c.name)}｜${esc(c.role)}</option>`).join('');
@@ -177,16 +191,19 @@ function render() {
   let c = '';
   if (page === 'home') {
     const cls = meta.classes[p.classKey];
-    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}</div></div>`).join('')}</div></div></div><div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
+    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}${effectText(it)}</div></div>`).join('')}</div></div></div><div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
   }
   if (page === 'training') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/grassland.png', 'scene-img', '練功場')}<div><h2>練功場：逾放怨靈沙洲</h2><p>練功只給經驗，不掉裝備。每次消耗疲勞 10，會跳出 3～5 句戰鬥敘述，包含技能、傷害、反擊與獎勵。</p>${img('assets/images/monsters/f01_skeleton.png', 'enemy-preview', '逾放怨靈')}<button onclick="act('/api/training')">進入小視窗戰鬥</button></div></div>`;
+    const firstMap = meta.mapMonsters?.maps?.[0];
+    const firstMonster = firstMap?.monsters?.[0];
+    c = `<div class="card scene-card">${img(firstMap?.scenePath || 'assets/images/scenes/grassland.png', 'scene-img', '練功場')}<div><h2>練功場：隨機遠征</h2><p>練功只給經驗，不掉裝備。每次消耗疲勞 10，會從 15 個場景與 150 隻魔物中隨機抽選遭遇。</p>${img(firstMonster?.assetPath || 'assets/images/monsters/f01_skeleton.png', 'enemy-preview', firstMonster?.name || '魔物')}<button onclick="act('/api/training')">進入小視窗戰鬥</button></div></div>`;
   }
   if (page === 'dungeon') {
-    const saved = eqObj(p.dungeonSave).floor || 1;
+    const save = eqObj(p.dungeonSave);
+    const saved = save.floor || 1;
     const maxFloor = meta.dungeonMaxFloor || FALLBACK_DUNGEON_MAX_FLOOR;
     const preview = monsterForFloor(Math.min(saved, maxFloor));
-    c = `<div class="card scene-card">${img('assets/images/scenes/cave.png', 'scene-img', '地下城')}<div><h2>地下城 ${maxFloor} 層：金融迷宮</h2><p>每次消耗疲勞 18。V1.4 已改為深層難度曲線，敵方 HP、防禦與反擊會隨層數有感提升。</p><label>挑戰層數</label><input id="floor" type="number" min="1" max="${maxFloor}" value="${Math.min(saved, maxFloor)}"><div>${img(preview?.image, 'enemy-preview', preview?.name)}<span class="pill">目前預覽：${esc(preview?.name || '')}</span></div><button onclick="dungeon()">挑戰/讀取存檔層數</button><details><summary>查看 ${maxFloor} 層故事</summary><div class="small storybox">${story(maxFloor)}</div></details></div></div>`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/cave.png', 'scene-img', '地下城')}<div><h2>地下城 ${maxFloor} 層：金融迷宮</h2><p>每次消耗疲勞 18。每週五 00:00（台北時間）刷新本週獎勵，並強制從第 1 層重新開始依序挑戰。</p><p><span class="pill">目前進度：第 ${Math.min(saved, maxFloor)} 層</span><span class="pill">本週週期：${esc(save.weekKey || '-')}</span></p><div>${img(preview?.image, 'enemy-preview', preview?.name)}<span class="pill">目前守衛：${esc(preview?.name || '')}</span></div><button onclick="dungeon()">挑戰目前層數</button><details><summary>查看 ${maxFloor} 層故事</summary><div class="small storybox">${story(maxFloor)}</div></details></div></div>`;
   }
   if (page === 'boss') {
     c = `<div class="card"><h2>世界 BOSS</h2><div id="bossbox">讀取中...</div><button class="primary-action" onclick="bossAtk()">${pageIcon('arena')}討伐世界 BOSS，消耗疲勞 25</button><div class="log" id="realtimeLog"></div><button onclick="craftBoss()">30 碎片合成 BOSS 裝備</button></div>`;
@@ -195,16 +212,16 @@ function render() {
     c = `<div class="card scene-card">${img('assets/images/scenes/prison.png', 'scene-img', '競技場')}<div><h2>玩家對戰競技場</h2><p>自動匹配其他玩家資料。每次消耗疲勞 15，勝敗依攻防專注、技能與亂數判定；對戰結果會同步寫入雙方近期戰鬥紀錄。</p><button class="primary-action" onclick="arenaFight()">${pageIcon('arena')}尋找對手開戰</button><div class="log" id="realtimeLog"></div></div></div>`;
   }
   if (page === 'guild') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/castle.png', 'scene-img', '公會城鎮')}<div><h2>公會與攻城戰</h2><input id="guild" placeholder="公會名稱" value="${esc(p.guild || '')}"><button onclick="joinGuild()">加入/創立公會</button><p>攻城戰每日可多次參與但每次消耗疲勞 30，目標為金控王城清算門。</p><button onclick="act('/api/guild-war')">參與攻城戰</button></div></div>`;
+    c = `<div id="guildBox" class="card">讀取公會資料中...</div>`;
   }
   if (page === 'daily') {
     c = `<div class="card"><h2>每日任務：台灣銀行業知識問答</h2><p>每日可進行一次，一天五題。題庫包含公平待客、洗錢防制、資訊安全社交工程防護、金融業法遵與市場風險概念。答對越多，EXP 與金幣越多。</p><div id="dailybox">讀取中...</div></div>`;
   }
   if (page === 'shop') {
-    c = `<div class="grid">${meta.shop.map(it => `<div class="card shop-card">${img(shopImage(it), 'item-icon-lg', it[0])}<h3>${esc(it[0])}</h3><p>${esc(it[3])}</p><p>價格 ${it[2]}｜每日上限 ${it[4]}</p><button onclick="buy('${it[1]}')">購買</button></div>`).join('')}</div>`;
+    c = `<div class="grid">${meta.shop.map(it => `<div class="card shop-card">${img(shopImage(it), 'item-icon-lg', it[0])}<h3>${esc(it[0])}</h3><p>${esc(it[3])}</p><p>價格 ${it[2]}｜每日庫存 ${it[4]}</p><button onclick="buy('${it[1]}')">購買</button></div>`).join('')}</div>`;
   }
   if (page === 'forge') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/volcano.png', 'scene-img', '鍛造區')}<div><h2>強化、附魔、特化區</h2><select id="slot">${Object.keys(eq).map(s => `<option>${esc(s)}</option>`).join('')}</select><button onclick="forge('enhance')">強化</button><button onclick="forge('enchant')">附魔</button><select id="spec"><option>攻擊特化</option><option>防禦特化</option><option>專注特化</option></select><button onclick="forge('specialize')">特化</button><p class="small">強化提高裝備係數，附魔提供金融主題詞綴，特化讓裝備偏攻擊/防禦/專注。</p></div></div>`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/volcano.png', 'scene-img', '鍛造區')}<div><h2>強化、附魔、特化區</h2><select id="slot">${Object.keys(eq).map(s => `<option>${esc(s)}</option>`).join('')}</select><button onclick="forge('enhance')">強化 +10</button><button onclick="forge('enchant')">附魔</button><select id="spec"><option>攻擊特化</option><option>防禦特化</option><option>HP特化</option><option>專注特化</option></select><button onclick="forge('specialize')">特化</button><p class="small">強化會直接提升裝備素質；+7～+10 成功率較低。附魔可出現反擊、迴避、掉寶、碎片、續戰與技能效果。</p></div></div>`;
   }
   if (page === 'rank') {
     c = `<div class="card"><h2>排行榜</h2><div id="ranks">讀取中...</div></div>`;
@@ -219,6 +236,8 @@ function render() {
   if (page === 'rank') loadRanks();
   if (page === 'catalog') loadCatalog();
   if (page === 'daily') loadDailyQuiz();
+  if (page === 'guild') loadGuild();
+  renderOnlinePanel();
 }
 function story(maxFloor = FALLBACK_DUNGEON_MAX_FLOOR) {
   const scenes = ['金庫荒廢區調查異常提款', 'ATM墓園掃蕩卡片怨靈', '利率鐘塔校準殖利率齒輪', '法遵圖書館封印裁罰卷宗', '董事會深淵對抗黑箱決策', '壓力測試迴廊承受極端情境', '資安防火牆塔追捕異常封包', '洗防暗河追蹤分層金流', '市場閃崩橋修復斷裂K線', '百層清算門面對監理魔王'];
@@ -257,18 +276,19 @@ function go(x) {
   render();
 }
 async function rest() {
-  await toast(await api('/api/rest', { method: 'POST' }));
+  try { await toast(await api('/api/rest', { method: 'POST' })); } catch (e) { alert(e.message); }
 }
 async function act(url) {
   try {
     const j = await api(url, { method: 'POST' });
-    modal(j.text || j.message);
+    const scene = j.encounter?.scene ? `${img(j.encounter.scene, 'scene-img', j.encounter.mapName || '場景')}<hr>` : '';
+    modal(scene + (j.text || j.message));
     await refresh();
   } catch (e) { alert(e.message); }
 }
 async function dungeon() {
   try {
-    const j = await api('/api/dungeon', { method: 'POST', body: JSON.stringify({ floor: floor.value }) });
+    const j = await api('/api/dungeon', { method: 'POST', body: JSON.stringify({}) });
     pendingItem = j.item || null;
     const extra = j.item ? `<hr><h3>獲得裝備，請比較後選擇</h3>${compareItemHtml(j.item)}` : '';
     modal(j.text + extra);
@@ -279,6 +299,25 @@ function itemScore(it) {
   if (!it) return 0;
   return Number(it.atk || 0) * 1.2 + Number(it.def || 0) + Number(it.focus || 0) * 0.9 + Number(it.enhance || 0) * 6;
 }
+function itemEffects(it) {
+  return { ...(it?.effects || {}), ...(it?.enchantEffects || {}), ...(it?.specEffects || {}) };
+}
+function effectText(it) {
+  const labels = {
+    counter: '反擊',
+    evasion: '迴避',
+    dropRate: '掉寶',
+    bossFragment: '碎片',
+    hpRegenBonus: '續戰',
+    skillDamage: '技能傷害',
+    skillRate: '技能率',
+    hpBonus: 'HP',
+    goldBonus: '金幣'
+  };
+  const e = itemEffects(it);
+  const rows = Object.entries(e).filter(([, v]) => Number(v)).map(([k, v]) => `${labels[k] || k} ${Number(v) > 0 ? '+' : ''}${Math.round(Number(v) * 100)}%`);
+  return rows.length ? `<br><span class="small">${rows.map(esc).join('｜')}</span>` : '';
+}
 function statDiff(newIt, oldIt, key) {
   const diff = Number(newIt?.[key] || 0) - Number(oldIt?.[key] || 0);
   const label = key === 'atk' ? '攻' : key === 'def' ? '防' : '專';
@@ -287,7 +326,7 @@ function statDiff(newIt, oldIt, key) {
 }
 function itemHtml(it, title = '') {
   if (!it) return `<div class="loot-card muted"><p>${esc(title || '空裝備欄')}</p></div>`;
-  return `<div class="loot-card">${img(itemImage(it), 'item-icon-lg', it.name)}<p>${title ? `<b>${esc(title)}</b><br>` : ''}<span class="rarity-${it.rarity}">${esc(it.name)}</span><br>${esc(it.slot)}｜${esc(it.rarity)}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance || 0}｜${esc(it.enchant || '未附魔')}｜${esc(it.spec || '未特化')}</p></div>`;
+  return `<div class="loot-card">${img(itemImage(it), 'item-icon-lg', it.name)}<p>${title ? `<b>${esc(title)}</b><br>` : ''}<span class="rarity-${it.rarity}">${esc(it.name)}</span><br>${esc(it.slot)}｜${esc(it.rarity)}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance || 0}｜${esc(it.enchant || '未附魔')}｜${esc(it.spec || '未特化')}${effectText(it)}</p></div>`;
 }
 function compareItemHtml(newIt) {
   const current = eqObj(me?.player?.equipment)[newIt.slot];
@@ -312,16 +351,88 @@ async function equipPending() {
   await refresh();
 }
 async function buy(sku) {
-  await toast(await api('/api/shop/buy', { method: 'POST', body: JSON.stringify({ sku }) }));
+  try { await toast(await api('/api/shop/buy', { method: 'POST', body: JSON.stringify({ sku }) })); } catch (e) { modal(esc(e.message || '已無庫存')); }
 }
 async function forge(type) {
   const specValue = document.querySelector('#spec')?.value;
-  await toast(await api('/api/' + type, { method: 'POST', body: JSON.stringify({ slot: slot.value, spec: specValue }) }));
+  try { await toast(await api('/api/' + type, { method: 'POST', body: JSON.stringify({ slot: slot.value, spec: specValue }) })); } catch (e) { alert(e.message); }
 }
-async function joinGuild() {
-  const guildName = document.querySelector('#guild')?.value || '';
-  await toast(await api('/api/guild', { method: 'POST', body: JSON.stringify({ guild: guildName }) }));
-  if (socket?.connected) socket.emit('joinChat');
+const roleLabels = { leader: '會長', vice: '副會長', officer: '幹部', member: '公會成員' };
+function rolePower(role) {
+  return ({ leader: 4, vice: 3, officer: 2, member: 1 })[role] || 0;
+}
+function roleOptions(current) {
+  return ['vice', 'officer', 'member'].map(r => `<option value="${r}" ${current === r ? 'selected' : ''}>${roleLabels[r]}</option>`).join('');
+}
+async function loadGuild() {
+  const box = $('#guildBox');
+  if (!box) return;
+  guildState = await api('/api/guild');
+  box.innerHTML = guildHtml(guildState);
+}
+function guildHtml(data) {
+  if (!data.guild) {
+    const guildRows = (data.guilds || []).map(g => `<tr><td data-label="公會">${esc(g.name)}</td><td data-label="等級" class="num">Lv.${g.level}</td><td data-label="人數" class="num">${g.members}/${g.capacity}</td><td data-label="金庫" class="num">${g.treasury || 0}</td><td data-label="操作"><button onclick="applyGuild(decodeURIComponent('${encodeURIComponent(g.name)}'))">申請加入</button></td></tr>`).join('');
+    return `<div class="scene-card">${img('assets/images/scenes/castle.png', 'scene-img', '公會城鎮')}<div><h2>公會管理</h2><p>公會採申請審核制。創立後會固定所屬公會，改名需由會長花費金幣且有 7 天冷卻。</p><input id="newGuildName" maxlength="16" placeholder="新公會名稱"><button onclick="createGuild()">創立公會</button></div></div><h3>公會清單</h3><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>公會</th><th>等級</th><th>人數</th><th>金庫</th><th>操作</th></tr></thead><tbody>${guildRows || `<tr><td colspan="5" class="small">目前尚無公會。</td></tr>`}</tbody></table></div>`;
+  }
+  const g = data.guild;
+  const power = rolePower(data.userRole);
+  const canApprove = power >= 2;
+  const canManage = power >= 3;
+  const isLeader = data.userRole === 'leader';
+  const memberRows = (data.members || []).map(m => {
+    const canRole = (isLeader || (data.userRole === 'vice' && ['officer', 'member'].includes(m.role))) && m.role !== 'leader' && m.playerId !== me.player.id;
+    const canKick = canManage && m.role !== 'leader' && m.playerId !== me.player.id && !(data.userRole === 'vice' && rolePower(m.role) >= 3);
+    return `<tr><td data-label="成員">${m.online ? '<span class="ok">●</span> ' : ''}${esc(m.username)}</td><td data-label="職階">${canRole ? `<select id="role_${m.playerId}">${roleOptions(m.role)}</select><button onclick="changeGuildRole(${m.playerId})">調整</button>` : esc(roleLabels[m.role] || m.role)}</td><td data-label="職業">${esc(meta.classes?.[m.classKey || m.classkey]?.name || '-')}</td><td data-label="等級" class="num">${m.level}</td><td data-label="HP" class="num">${m.hp}/${m.hpMax || m.hpmax}</td><td data-label="捐獻" class="num">${m.donated || 0}</td><td data-label="操作">${canKick ? `<button onclick="kickGuildMember(${m.playerId})">踢出</button>` : '-'}</td></tr>`;
+  }).join('');
+  const appRows = (data.applications || []).map(a => `<tr><td data-label="申請者">${esc(a.username)}</td><td data-label="職業">${esc(meta.classes?.[a.classKey || a.classkey]?.name || '-')}</td><td data-label="等級" class="num">${a.level}</td><td data-label="留言">${esc(a.message || '-')}</td><td data-label="操作"><button onclick="decideGuildApp(${a.id},'approve')">同意</button>${power >= 3 ? `<button onclick="decideGuildApp(${a.id},'reject')">拒絕</button>` : ''}</td></tr>`).join('');
+  const logs = (data.logs || []).map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${esc(l.text)}</p>`).join('');
+  return `<div class="scene-card">${img('assets/images/scenes/castle.png', 'scene-img', g.name)}<div><h2>${esc(g.name)}｜${esc(data.userRoleLabel)}</h2><p>${esc(g.notice || '尚未設定公會公告')}</p><p><span class="pill">Lv.${g.level}</span><span class="pill">人數 ${g.members}/${g.capacity}</span><span class="pill">金庫 ${g.treasury}</span><span class="pill">下級費用 ${g.upgradeCost}</span></p><p class="small">攻城戰目前暫未開放，後續版本再更新公會戰玩法。</p><button disabled>攻城戰暫未開放</button></div></div>
+  <div class="grid"><div class="panel"><h3>金庫捐獻</h3><input id="donateAmount" type="number" min="1" placeholder="捐獻金幣"><button onclick="donateGuild()">捐獻</button></div>
+  ${canManage ? `<div class="panel"><h3>公會升級 / 公告</h3><button onclick="upgradeGuild()">使用金庫升級</button><textarea id="guildNotice" maxlength="180">${esc(g.notice || '')}</textarea><button onclick="updateGuildNotice()">更新公告</button></div>` : ''}
+  ${isLeader ? `<div class="panel"><h3>公會改名</h3><input id="renameGuildName" maxlength="16" placeholder="新公會名稱"><p class="small">改名費用 ${g.renameCost} 金幣，冷卻 7 天。</p><button onclick="renameGuild()">改名</button></div>` : ''}
+  <div class="panel"><h3>離開公會</h3><button onclick="leaveGuild()">離開公會</button></div></div>
+  <h3>成員資訊</h3><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>成員</th><th>職階</th><th>職業</th><th>等級</th><th>HP</th><th>捐獻</th><th>操作</th></tr></thead><tbody>${memberRows}</tbody></table></div>
+  ${canApprove ? `<h3>入會申請</h3><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>申請者</th><th>職業</th><th>等級</th><th>留言</th><th>操作</th></tr></thead><tbody>${appRows || `<tr><td colspan="5" class="small">目前沒有待審核申請。</td></tr>`}</tbody></table></div>` : ''}
+  <h3>公會紀錄</h3><div class="log">${logs || '<p class="small">尚無公會紀錄。</p>'}</div>`;
+}
+async function guildAction(url, body = {}) {
+  try {
+    const j = await api(url, { method: 'POST', body: JSON.stringify(body) });
+    modal(esc(j.message || '操作完成'));
+    if (socket?.connected) socket.emit('joinChat');
+    await refresh();
+  } catch (e) { alert(e.message); }
+}
+async function createGuild() {
+  await guildAction('/api/guild/create', { guild: newGuildName.value });
+}
+async function applyGuild(name) {
+  await guildAction('/api/guild/apply', { guild: name });
+}
+async function donateGuild() {
+  await guildAction('/api/guild/donate', { amount: donateAmount.value });
+}
+async function upgradeGuild() {
+  await guildAction('/api/guild/upgrade');
+}
+async function renameGuild() {
+  await guildAction('/api/guild/rename', { name: renameGuildName.value });
+}
+async function updateGuildNotice() {
+  await guildAction('/api/guild/notice', { notice: guildNotice.value });
+}
+async function decideGuildApp(id, decision) {
+  await guildAction('/api/guild/application', { id, decision });
+}
+async function changeGuildRole(playerId) {
+  await guildAction('/api/guild/role', { playerId, role: document.querySelector(`#role_${playerId}`).value });
+}
+async function kickGuildMember(playerId) {
+  if (confirm('確定要將此成員移出公會嗎？')) await guildAction('/api/guild/kick', { playerId });
+}
+async function leaveGuild() {
+  if (confirm('確定要離開公會嗎？')) await guildAction('/api/guild/leave');
 }
 async function loadBoss() {
   const j = await api('/api/boss');
