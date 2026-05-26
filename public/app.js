@@ -24,7 +24,8 @@ const names = {
   shop: '道具商店',
   forge: '強化附魔',
   rank: '排行榜',
-  catalog: '裝備圖鑑'
+  catalog: '裝備圖鑑',
+  admin: '管理後台'
 };
 
 const navIcons = {
@@ -38,7 +39,8 @@ const navIcons = {
   shop: 'assets/images/ui/shop.png',
   forge: 'assets/images/ui/settings.png',
   rank: 'assets/images/ui/rank.png',
-  catalog: 'assets/images/ui/bag.png'
+  catalog: 'assets/images/ui/bag.png',
+  admin: 'assets/images/ui/settings.png'
 };
 
 function eqObj(v) {
@@ -99,6 +101,7 @@ async function api(url, opts = {}) {
 }
 async function boot() {
   meta = await api('/api/meta');
+  if (location.pathname === '/admin') page = 'admin';
   if (token) {
     try {
       me = await api('/api/me');
@@ -160,8 +163,9 @@ function layout(content) {
       <div class="bar stam"><i style="width:${p.stamina / 2}%"></i></div><span class="small">疲勞 ${p.stamina}/200，每小時 +25</span>
     </div>
   </div>
-  <div class="nav">${Object.keys(names).map(x => `<button onclick="go('${x}')" class="${page === x ? 'active' : ''}">${pageIcon(x)}${names[x]}</button>`).join('')}<button onclick="logout()">登出</button></div>` : '';
-  const main = `<div class="wrap"><div class="title">🌳 巨樹王國：Kingdom of Giant Tree Online</div>${header}${content}<div class="footer">金融故事像素風格網頁RPG</div></div>`;
+  <div class="nav">${Object.keys(names).filter(x => x !== 'admin' || me?.user?.isAdmin).map(x => `<button onclick="go('${x}')" class="${page === x ? 'active' : ''}">${pageIcon(x)}${names[x]}</button>`).join('')}<button onclick="logout()">登出</button></div>` : '';
+  const announcements = (meta.announcements || []).length ? `<div class="panel announce-box">${meta.announcements.map(a => `<p><b>${esc(a.title)}</b>｜${esc(a.text)}</p>`).join('')}</div>` : '';
+  const main = `<div class="wrap"><div class="title">🌳 巨樹王國：Kingdom of Giant Tree Online</div>${announcements}${header}${content}<div class="footer">金融故事像素風格網頁RPG</div></div>`;
   return token ? `<div class="game-shell"><main class="main-pane">${main}</main>${chatSidebar()}</div>${onlinePanel()}` : main;
 }
 function onlinePanel() {
@@ -196,20 +200,20 @@ function render() {
   if (page === 'training') {
     const firstMap = meta.mapMonsters?.maps?.[0];
     const firstMonster = firstMap?.monsters?.[0];
-    c = `<div class="card scene-card">${img(firstMap?.scenePath || 'assets/images/scenes/grassland.png', 'scene-img', '練功場')}<div><h2>練功場：隨機遠征</h2><p>練功只給經驗，不掉裝備。每次消耗疲勞 10，會從 15 個場景與 150 隻魔物中隨機抽選遭遇。</p>${img(firstMonster?.assetPath || 'assets/images/monsters/f01_skeleton.png', 'enemy-preview', firstMonster?.name || '魔物')}<button onclick="act('/api/training')">進入小視窗戰鬥</button></div></div>`;
+    c = `<div class="card scene-card">${img(firstMap?.scenePath || 'assets/images/scenes/grassland.png', 'scene-img', '練功場')}<div><h2>練功場：隨機遠征</h2><p>練功只給經驗，不掉裝備。每次消耗疲勞 ${meta.fatigue?.costs?.training || 5}，會從 15 個場景與 150 隻魔物中隨機抽選遭遇。</p>${img(firstMonster?.assetPath || 'assets/images/monsters/f01_skeleton.png', 'enemy-preview', firstMonster?.name || '魔物')}<button onclick="act('/api/training')">進入小視窗戰鬥</button></div></div>`;
   }
   if (page === 'dungeon') {
     const save = eqObj(p.dungeonSave);
     const saved = save.floor || 1;
     const maxFloor = meta.dungeonMaxFloor || FALLBACK_DUNGEON_MAX_FLOOR;
     const preview = monsterForFloor(Math.min(saved, maxFloor));
-    c = `<div class="card scene-card">${img('assets/images/scenes/cave.png', 'scene-img', '地下城')}<div><h2>地下城 ${maxFloor} 層：金融迷宮</h2><p>每次消耗疲勞 18。每週五 00:00（台北時間）刷新本週獎勵，並強制從第 1 層重新開始依序挑戰。</p><p><span class="pill">目前進度：第 ${Math.min(saved, maxFloor)} 層</span><span class="pill">本週週期：${esc(save.weekKey || '-')}</span></p><div>${img(preview?.image, 'enemy-preview', preview?.name)}<span class="pill">目前守衛：${esc(preview?.name || '')}</span></div><button onclick="dungeon()">挑戰目前層數</button><details><summary>查看 ${maxFloor} 層故事</summary><div class="small storybox">${story(maxFloor)}</div></details></div></div>`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/cave.png', 'scene-img', '地下城')}<div><h2>地下城 ${maxFloor} 層：金融迷宮</h2><p>每次消耗疲勞 ${meta.fatigue?.costs?.dungeon || 10}。每週五 00:00（台北時間）刷新本週獎勵，並強制從第 1 層重新開始依序挑戰。</p><p><span class="pill">目前進度：第 ${Math.min(saved, maxFloor)} 層</span><span class="pill">本週週期：${esc(save.weekKey || '-')}</span></p><div>${img(preview?.image, 'enemy-preview', preview?.name)}<span class="pill">目前守衛：${esc(preview?.name || '')}</span></div><button onclick="dungeon()">挑戰目前層數</button><details><summary>查看 ${maxFloor} 層故事</summary><div class="small storybox">${story(maxFloor)}</div></details></div></div>`;
   }
   if (page === 'boss') {
-    c = `<div class="card"><h2>世界 BOSS</h2><div id="bossbox">讀取中...</div><button class="primary-action" onclick="bossAtk()">${pageIcon('arena')}討伐世界 BOSS，消耗疲勞 25</button><div class="log" id="realtimeLog"></div><button onclick="craftBoss()">30 碎片合成 BOSS 裝備</button></div>`;
+    c = `<div class="card"><h2>世界 BOSS</h2><div id="bossbox">讀取中...</div><button class="primary-action" onclick="bossAtk()">${pageIcon('arena')}討伐世界 BOSS，消耗疲勞 ${meta.fatigue?.costs?.boss || 15}</button><div class="log" id="realtimeLog"></div><button onclick="craftBoss()">30 碎片合成 BOSS 裝備</button></div>`;
   }
   if (page === 'arena') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/prison.png', 'scene-img', '競技場')}<div><h2>玩家對戰競技場</h2><p>自動匹配其他玩家資料。每次消耗疲勞 15，勝敗依攻防專注、技能與亂數判定；對戰結果會同步寫入雙方近期戰鬥紀錄。</p><button class="primary-action" onclick="arenaFight()">${pageIcon('arena')}尋找對手開戰</button><div class="log" id="realtimeLog"></div></div></div>`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/prison.png', 'scene-img', '競技場')}<div><h2>玩家對戰競技場</h2><p>自動匹配其他玩家資料。每次消耗疲勞 ${meta.fatigue?.costs?.arena || 5}，勝敗依攻防專注、技能與亂數判定；對戰結果會同步寫入雙方近期戰鬥紀錄。</p><button class="primary-action" onclick="arenaFight()">${pageIcon('arena')}尋找對手開戰</button><div class="log" id="realtimeLog"></div></div></div>`;
   }
   if (page === 'guild') {
     c = `<div id="guildBox" class="card">讀取公會資料中...</div>`;
@@ -221,7 +225,10 @@ function render() {
     c = `<div class="grid">${meta.shop.map(it => `<div class="card shop-card">${img(shopImage(it), 'item-icon-lg', it[0])}<h3>${esc(it[0])}</h3><p>${esc(it[3])}</p><p>價格 ${it[2]}｜每日庫存 ${it[4]}</p><button onclick="buy('${it[1]}')">購買</button></div>`).join('')}</div>`;
   }
   if (page === 'forge') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/volcano.png', 'scene-img', '鍛造區')}<div><h2>強化、附魔、特化區</h2><select id="slot">${Object.keys(eq).map(s => `<option>${esc(s)}</option>`).join('')}</select><button onclick="forge('enhance')">強化 +10</button><button onclick="forge('enchant')">附魔</button><select id="spec"><option>攻擊特化</option><option>防禦特化</option><option>HP特化</option><option>專注特化</option></select><button onclick="forge('specialize')">特化</button><p class="small">強化會直接提升裝備素質；+7～+10 成功率較低。附魔可出現反擊、迴避、掉寶、碎片、續戰與技能效果。</p></div></div>`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/volcano.png', 'scene-img', '鍛造區')}<div><h2>強化、附魔、特化區</h2><select id="slot">${Object.keys(eq).map(s => `<option>${esc(s)}</option>`).join('')}</select><button onclick="forge('enhance')">強化</button><button onclick="forge('enchant')">附魔</button><select id="spec"><option>攻擊特化</option><option>防禦特化</option><option>HP特化</option><option>專注特化</option></select><button onclick="forge('specialize')">特化</button><p class="small">強化、附魔、特化會消耗對應道具與工本費金幣。工本費為 200 + 目前強化等級 x 60。</p></div></div>${inventoryGrid()}`;
+  }
+  if (page === 'admin') {
+    c = me.user.isAdmin ? `<div class="card"><h2>管理後台</h2><div id="adminBox">讀取中...</div></div>` : `<div class="card"><h2>管理後台</h2><p class="danger">需要管理員權限。</p></div>`;
   }
   if (page === 'rank') {
     c = `<div class="card"><h2>排行榜</h2><div id="ranks">讀取中...</div></div>`;
@@ -237,6 +244,7 @@ function render() {
   if (page === 'catalog') loadCatalog();
   if (page === 'daily') loadDailyQuiz();
   if (page === 'guild') loadGuild();
+  if (page === 'admin' && me.user.isAdmin) loadAdmin();
   renderOnlinePanel();
 }
 function story(maxFloor = FALLBACK_DUNGEON_MAX_FLOOR) {
@@ -317,6 +325,11 @@ function effectText(it) {
   const e = itemEffects(it);
   const rows = Object.entries(e).filter(([, v]) => Number(v)).map(([k, v]) => `${labels[k] || k} ${Number(v) > 0 ? '+' : ''}${Math.round(Number(v) * 100)}%`);
   return rows.length ? `<br><span class="small">${rows.map(esc).join('｜')}</span>` : '';
+}
+function inventoryGrid() {
+  const items = me.inventory || [];
+  const mats = items.filter(it => it.material || Number(it.qty || 0) > 0);
+  return `<div class="card"><h3>鍛造背包</h3><div class="bag-grid">${mats.map(it => `<div class="bag-slot ${Number(it.qty || 0) <= 0 ? 'empty' : ''}">${img(it.image, 'item-icon-lg', it.name)}<b>${esc(it.name)}</b><span>x${it.qty || 0}</span></div>`).join('')}</div></div>`;
 }
 function statDiff(newIt, oldIt, key) {
   const diff = Number(newIt?.[key] || 0) - Number(oldIt?.[key] || 0);
@@ -433,6 +446,99 @@ async function kickGuildMember(playerId) {
 }
 async function leaveGuild() {
   if (confirm('確定要離開公會嗎？')) await guildAction('/api/guild/leave');
+}
+async function loadAdmin(q = '') {
+  const box = $('#adminBox');
+  if (!box) return;
+  const [summary, players, guilds] = await Promise.all([
+    api('/api/admin/summary'),
+    api('/api/admin/players?q=' + encodeURIComponent(q)),
+    api('/api/admin/guilds')
+  ]);
+  box.innerHTML = adminHtml(summary, players.players || [], guilds.guilds || []);
+}
+function adminHtml(summary, players, guilds) {
+  const settings = summary.settings || {};
+  const playerRows = players.map(p => `<tr><td data-label="ID">${p.id}</td><td data-label="帳號">${esc(p.username)}${p.banned ? ' <span class="danger">停權</span>' : ''}</td><td data-label="職業">${esc(meta.classes?.[p.classKey || p.classkey]?.name || '-')}</td><td data-label="等級" class="num">${p.level}</td><td data-label="金幣" class="num">${p.gold}</td><td data-label="公會">${esc(p.guild || '-')}</td><td data-label="操作"><button onclick="adminOpenPlayer(${p.id})">管理</button></td></tr>`).join('');
+  const guildRows = guilds.map(g => `<tr><td data-label="公會">${esc(g.name)}</td><td data-label="等級" class="num">${g.level}</td><td data-label="人數" class="num">${g.members}/${g.capacity}</td><td data-label="金庫" class="num">${g.treasury}</td><td data-label="操作"><button onclick="adminEditGuild(decodeURIComponent('${encodeURIComponent(g.name)}'),${g.level},${g.treasury},decodeURIComponent('${encodeURIComponent(g.notice || '')}'))">調整</button></td></tr>`).join('');
+  const logs = (summary.logs || []).map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${esc(l.username || 'admin')}｜${esc(l.action)}｜${esc(l.targettype || '')}:${esc(l.targetid || '')}</p>`).join('');
+  const announcements = (summary.announcements || []).map(a => `<tr><td data-label="標題">${esc(a.title)}</td><td data-label="內容">${esc(a.text)}</td><td data-label="狀態">${Number(a.active) ? '啟用' : '停用'}</td><td data-label="操作"><button onclick="adminToggleAnnouncement(${a.id},${Number(a.active) ? 0 : 1})">${Number(a.active) ? '停用' : '啟用'}</button></td></tr>`).join('');
+  return `<div class="grid admin-summary"><div class="panel"><b>玩家</b><p>${summary.players}</p></div><div class="panel"><b>帳號</b><p>${summary.users}</p></div><div class="panel"><b>公會</b><p>${summary.guilds}</p></div><div class="panel"><b>線上</b><p>${(summary.online || []).length}</p></div></div>
+  <div class="panel"><h3>玩家查詢與調整</h3><div class="inline-row"><input id="adminSearch" placeholder="帳號或玩家ID"><button onclick="loadAdmin(adminSearch.value)">查詢</button></div><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>ID</th><th>帳號</th><th>職業</th><th>等級</th><th>金幣</th><th>公會</th><th>操作</th></tr></thead><tbody>${playerRows || `<tr><td colspan="7" class="small">沒有資料</td></tr>`}</tbody></table></div></div>
+  <div class="panel"><h3>公會管理</h3><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>公會</th><th>等級</th><th>人數</th><th>金庫</th><th>操作</th></tr></thead><tbody>${guildRows || `<tr><td colspan="5" class="small">沒有資料</td></tr>`}</tbody></table></div></div>
+  <div class="panel"><h3>遊戲參數調整</h3><div class="settings-grid">
+    ${adminSettingInput('fatigueTraining','練功疲勞',settings.fatigueTraining)}
+    ${adminSettingInput('fatigueDungeon','地下城疲勞',settings.fatigueDungeon)}
+    ${adminSettingInput('fatigueBoss','BOSS疲勞',settings.fatigueBoss)}
+    ${adminSettingInput('fatigueArena','競技場疲勞',settings.fatigueArena)}
+    ${adminSettingInput('restCost','休息費用',settings.restCost)}
+    ${adminSettingInput('dungeonEquipmentDropRate','地下城掉裝率',settings.dungeonEquipmentDropRate)}
+    ${adminSettingInput('bossEquipmentDropRate','BOSS掉裝率',settings.bossEquipmentDropRate)}
+    ${adminSettingInput('bossFragmentDropRate','BOSS碎片率',settings.bossFragmentDropRate)}
+    ${adminSettingInput('bossFragmentBonusDropRate','BOSS額外碎片率',settings.bossFragmentBonusDropRate)}
+  </div><button onclick="adminSaveSettings()">儲存參數</button></div>
+  <div class="panel"><h3>道具 / 裝備補發</h3><div class="settings-grid"><input id="grantPlayerId" placeholder="玩家ID"><select id="grantSku">${meta.shop.map(it => `<option value="${it[1]}">${esc(it[0])}</option>`).join('')}</select><input id="grantQty" type="number" min="1" value="1"><button onclick="adminGrantMaterial()">補發道具</button><select id="grantSlot">${(meta.slots || []).map(s => `<option>${esc(s)}</option>`).join('')}</select><input id="grantLevel" type="number" min="1" max="100" value="1"><button onclick="adminGrantEquipment()">補發裝備</button></div></div>
+  <div class="panel"><h3>系統公告</h3><input id="annTitle" placeholder="公告標題"><textarea id="annText" maxlength="500" placeholder="公告內容"></textarea><button onclick="adminCreateAnnouncement()">發布公告</button><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>標題</th><th>內容</th><th>狀態</th><th>操作</th></tr></thead><tbody>${announcements || `<tr><td colspan="4" class="small">尚無公告</td></tr>`}</tbody></table></div></div>
+  <div class="panel"><h3>管理員操作紀錄</h3><div class="log">${logs || '<p class="small">尚無紀錄</p>'}</div></div>`;
+}
+function adminSettingInput(key, label, value) {
+  return `<label>${esc(label)}<input id="set_${key}" type="number" step="0.001" value="${esc(value ?? '')}"></label>`;
+}
+function adminConfirm() {
+  return prompt('高風險操作請輸入 CONFIRM') === 'CONFIRM';
+}
+async function adminPost(url, body = {}) {
+  if (!adminConfirm()) return;
+  try {
+    const j = await api(url, { method: 'POST', body: JSON.stringify({ ...body, confirm: 'CONFIRM' }) });
+    modal(esc(j.message || '操作完成'));
+    meta = await api('/api/meta');
+    await refresh();
+  } catch (e) { alert(e.message); }
+}
+async function adminOpenPlayer(id) {
+  const j = await api('/api/admin/player/' + id);
+  const p = j.player;
+  const inv = (j.inventory || []).filter(x => x.qty > 0).map(x => `${esc(x.name)} x${x.qty}`).join('｜') || '無';
+  modal(`<h3>玩家 ${esc(p.username)}｜ID ${p.id}</h3><div class="settings-grid">
+    <label>等級<input id="adm_level" type="number" value="${p.level}"></label>
+    <label>EXP<input id="adm_exp" type="number" value="${p.exp}"></label>
+    <label>金幣<input id="adm_gold" type="number" value="${p.gold}"></label>
+    <label>HP<input id="adm_hp" type="number" value="${p.hp}"></label>
+    <label>HP上限<input id="adm_hpMax" type="number" value="${p.hpMax || p.hpmax}"></label>
+    <label>疲勞<input id="adm_stamina" type="number" value="${p.stamina}"></label>
+    <label>BOSS碎片<input id="adm_bossFragments" type="number" value="${p.bossFragments || p.bossfragments || 0}"></label>
+  </div><p class="small">背包：${inv}</p><button onclick="adminUpdatePlayer(${p.id})">儲存玩家資料</button><button onclick="adminBanPlayer(${p.id},${p.banned ? 0 : 1})">${p.banned ? '解除停權' : '停權帳號'}</button>`);
+}
+async function adminUpdatePlayer(id) {
+  await adminPost('/api/admin/player/' + id + '/update', { level: adm_level.value, exp: adm_exp.value, gold: adm_gold.value, hp: adm_hp.value, hpMax: adm_hpMax.value, stamina: adm_stamina.value, bossFragments: adm_bossFragments.value });
+}
+async function adminBanPlayer(id, banned) {
+  await adminPost('/api/admin/player/' + id + '/ban', { banned });
+}
+async function adminGrantMaterial() {
+  await adminPost('/api/admin/grant/material', { playerId: grantPlayerId.value, sku: grantSku.value, qty: grantQty.value });
+}
+async function adminGrantEquipment() {
+  await adminPost('/api/admin/grant/equipment', { playerId: grantPlayerId.value, slot: grantSlot.value, level: grantLevel.value });
+}
+async function adminEditGuild(name, level, treasury, notice) {
+  modal(`<h3>公會管理：${esc(name)}</h3><label>等級<input id="admGuildLevel" type="number" value="${level}"></label><label>金庫<input id="admGuildTreasury" type="number" value="${treasury}"></label><textarea id="admGuildNotice">${esc(notice || '')}</textarea><button onclick="adminSaveGuild('${encodeURIComponent(name)}')">儲存公會</button>`);
+}
+async function adminSaveGuild(nameEncoded) {
+  await adminPost('/api/admin/guild/update', { name: decodeURIComponent(nameEncoded), level: admGuildLevel.value, treasury: admGuildTreasury.value, notice: admGuildNotice.value });
+}
+async function adminSaveSettings() {
+  const settings = {};
+  ['fatigueTraining', 'fatigueDungeon', 'fatigueBoss', 'fatigueArena', 'restCost', 'dungeonEquipmentDropRate', 'bossEquipmentDropRate', 'bossFragmentDropRate', 'bossFragmentBonusDropRate']
+    .forEach(k => { settings[k] = document.querySelector('#set_' + k)?.value; });
+  await adminPost('/api/admin/settings', { settings });
+}
+async function adminCreateAnnouncement() {
+  await adminPost('/api/admin/announcement', { title: annTitle.value, text: annText.value });
+}
+async function adminToggleAnnouncement(id, active) {
+  await adminPost('/api/admin/announcement/' + id + '/toggle', { active });
 }
 async function loadBoss() {
   const j = await api('/api/boss');

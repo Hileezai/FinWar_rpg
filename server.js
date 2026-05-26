@@ -17,6 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
 const DATABASE_URL = process.env.DATABASE_URL;
+const ADMIN_USERNAMES = MasterTest Set(String(process.env.ADMIN_USERNAMES || '').split(',').map(x => x.trim()).filter(Boolean));
 
 if (!DATABASE_URL) {
   console.warn('WARNING: DATABASE_URL is not set. PostgreSQL connection will fail until you set it.');
@@ -192,8 +193,33 @@ const BOSS_FRAGMENT_DROP_RATE = 0.385;
 const BOSS_FRAGMENT_BONUS_DROP_RATE = 0.07;
 const MAX_ENHANCE = 10;
 const ENHANCE_SUCCESS_RATES = [0, 0.95, 0.86, 0.76, 0.64, 0.52, 0.42, 0.28, 0.18, 0.11, 0.06];
+const FORGE_BASE_FEE = 200;
+const FORGE_ENHANCE_FEE = 60;
 const HP_REGEN_INTERVAL = 10 * 60 * 1000;
 const GUILD_RENAME_COOLDOWN = 7 * 24 * 60 * 60 * 1000;
+const MATERIAL_SKUS = new Set(['enhance_1', 'enhance_2', 'enchant_ink', 'special_core']);
+const DEFAULT_GAME_SETTINGS = {
+  fatigueTraining: 5,
+  fatigueDungeon: 10,
+  fatigueArena: 5,
+  fatigueBoss: 15,
+  restCost: 100,
+  dungeonEquipmentDropRate: DUNGEON_EQUIPMENT_DROP_RATE,
+  bossEquipmentDropRate: BOSS_EQUIPMENT_DROP_RATE,
+  bossFragmentDropRate: BOSS_FRAGMENT_DROP_RATE,
+  bossFragmentBonusDropRate: BOSS_FRAGMENT_BONUS_DROP_RATE
+};
+const GAME_SETTING_LIMITS = {
+  fatigueTraining: [0, 200],
+  fatigueDungeon: [0, 200],
+  fatigueArena: [0, 200],
+  fatigueBoss: [0, 200],
+  restCost: [0, 1000000],
+  dungeonEquipmentDropRate: [0, 1],
+  bossEquipmentDropRate: [0, 1],
+  bossFragmentDropRate: [0, 1],
+  bossFragmentBonusDropRate: [0, 1]
+};
 const GUILD_ROLES = {
   leader: { label: '會長', power: 4 },
   vice: { label: '副會長', power: 3 },
@@ -251,6 +277,7 @@ const SHOP = [
   ['冷錢包', 'cold_wallet', 600, 'PK 敗北保護', 2, 'assets/images/items/coin_bag.png'],
   ['董事會邀請函', 'board_invite', 1500, '高階活動入場券', 1, 'assets/images/items/scroll_revive.png']
 ];
+const INVENTORY_SKUS = new Set(SHOP.map(x => x[1]));
 
 const BOSSES = [
   ['週一', '系統性金融風暴', '連鎖曝險之眼', 'risk', 'assets/images/bosses/boss_01_systemic_storm.png', '烏雲與雷電凝聚成系統性風險，會用連鎖違約閃電掃蕩戰場。'],
@@ -505,6 +532,7 @@ function safeText(v) { return String(v ?? '').replace(/[<>&]/g, '').trim().slice
 function safeChatText(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 160); }
 function safeGuildName(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16); }
 function safeGuildNotice(v) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180); }
+function safeLongText(v, max = 500) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, max); }
 function clamp(n, min, max) { return Math.max(min, Math.min(max, Number(n) || 0)); }
 function rarityForLevel(level) { return RARITIES[Math.min(RARITIES.length - 1, Math.floor((Number(level || 1) - 1) / 10))]; }
 function hashInt(s) {
@@ -600,6 +628,51 @@ function trainingEncounter() {
     role: monster?.combatRole || '',
     theme: map.theme || ''
   };
+}
+function shopItemBySku(sku) {
+  return SHOP.find(x => x[1] === sku) || null;
+}
+function materialForForge(type, currentEnhance = 0) {
+  if (type === 'enhance') return Number(currentEnhance || 0) >= 6 ? 'enhance_2' : 'enhance_1';
+  if (type === 'enchant') return 'enchant_ink';
+  if (type === 'specialize') return 'special_core';
+  return '';
+}
+function forgeFee(currentEnhance = 0) {
+  return FORGE_BASE_FEE + Number(currentEnhance || 0) * FORGE_ENHANCE_FEE;
+}
+async function getInventory(playerId) {
+  const rows = await all('SELECT sku,qty FROM inventory WHERE playerId=$1 ORDER BY sku', [playerId]);
+  const qtyBySku = Object.fromEntries(rows.map(r => [r.sku, Number(r.qty || 0)]));
+  return SHOP.filter(x => INVENTORY_SKUS.has(x[1])).map(item => ({
+    name: item[0],
+    sku: item[1],
+    price: item[2],
+    desc: item[3],
+    dailyStock: item[4],
+    image: item[5],
+    qty: qtyBySku[item[1]] || 0,
+    material: MATERIAL_SKUS.has(item[1])
+  }));
+}
+async function addInventory(playerId, sku, qty) {
+  if (!INVENTORY_SKUS.has(sku)) throw new Error('無此道具');
+  const amount = Math.max(1, Math.floor(Number(qty || 1)));
+  await q('INSERT INTO inventory(playerId,sku,qty) VALUES($1,$2,$3) ON CONFLICT(playerId,sku) DO UPDATE SET qty=inventory.qty+EXCLUDED.qty', [playerId, sku, amount]);
+}
+async function consumeInventory(playerId, sku, qty = 1) {
+  const row = await one('SELECT qty FROM inventory WHERE playerId=$1 AND sku=$2', [playerId, sku]);
+  const amount = Math.max(1, Math.floor(Number(qty || 1)));
+  if (Number(row?.qty || 0) < amount) return false;
+  await q('UPDATE inventory SET qty=qty-$1 WHERE playerId=$2 AND sku=$3', [amount, playerId, sku]);
+  return true;
+}
+function requireConfirm(req, res) {
+  if (String(req.body.confirm || '').trim() !== 'CONFIRM') {
+    res.status(400).json({ error: '高風險操作需輸入 CONFIRM 二次確認。' });
+    return false;
+  }
+  return true;
 }
 function padAsset(n) { return String(n).padStart(3, '0'); }
 function imageIndex(level, clsKey, max, salt = '') {
@@ -781,7 +854,10 @@ async function auth(req, res, next) {
   const t = h.startsWith('Bearer ') ? h.slice(7) : null;
   if (!t) return res.status(401).json({ error: '未登入' });
   try {
-    req.user = jwt.verify(t, JWT_SECRET);
+    const payload = jwt.verify(t, JWT_SECRET);
+    const row = await one('SELECT role,banned FROM users WHERE id=$1', [payload.id]);
+    if (!row || Number(row.banned || 0)) return res.status(403).json({ error: '帳號已停權或不存在' });
+    req.user = { ...payload, role: row.role || 'player', isAdmin: row.role === 'admin' || ADMIN_USERNAMES.has(payload.username) };
     next();
   } catch {
     res.status(401).json({ error: 'Token 已失效' });
@@ -791,7 +867,10 @@ async function socketAuth(socket, next) {
   const token = socket.handshake.auth?.token;
   if (!token) return next(new Error('未登入'));
   try {
-    socket.user = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+    const row = await one('SELECT role,banned FROM users WHERE id=$1', [payload.id]);
+    if (!row || Number(row.banned || 0)) return next(new Error('帳號已停權或不存在'));
+    socket.user = { ...payload, role: row.role || 'player', isAdmin: row.role === 'admin' || ADMIN_USERNAMES.has(payload.username) };
     next();
   } catch {
     next(new Error('Token 已失效'));
@@ -868,8 +947,9 @@ async function seedQuizQuestions() {
   }
 }
 async function initDb() {
-  await q(`CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, passwordHash TEXT NOT NULL, createdAt BIGINT NOT NULL);
+  await q(`CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, passwordHash TEXT NOT NULL, createdAt BIGINT NOT NULL, role TEXT DEFAULT 'player', banned INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS players(id SERIAL PRIMARY KEY, userId INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE, classKey TEXT NOT NULL, level INTEGER NOT NULL, exp INTEGER NOT NULL, gold INTEGER NOT NULL, hp INTEGER NOT NULL, hpMax INTEGER NOT NULL, atk INTEGER NOT NULL, def INTEGER NOT NULL, focus INTEGER NOT NULL, stamina INTEGER NOT NULL, staminaAt BIGINT NOT NULL, hpRegenAt BIGINT, equipment JSONB NOT NULL, dungeonSave JSONB NOT NULL, guild TEXT DEFAULT '', bossFragments INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS inventory(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, sku TEXT NOT NULL, qty INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(playerId,sku));
 CREATE TABLE IF NOT EXISTS dungeon_claims(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, floor INTEGER, claimedAt BIGINT, PRIMARY KEY(playerId,floor));
 CREATE TABLE IF NOT EXISTS dungeon_weekly_claims(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, floor INTEGER, weekKey TEXT, claimedAt BIGINT, PRIMARY KEY(playerId,floor,weekKey));
 CREATE TABLE IF NOT EXISTS purchases(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, sku TEXT, day TEXT, qty INTEGER, PRIMARY KEY(playerId,sku,day));
@@ -881,14 +961,25 @@ CREATE TABLE IF NOT EXISTS guild_applications(id SERIAL PRIMARY KEY, guildName T
 CREATE TABLE IF NOT EXISTS guild_logs(id SERIAL PRIMARY KEY, guildName TEXT REFERENCES guilds(name) ON DELETE CASCADE ON UPDATE CASCADE, actorPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, targetPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, action TEXT NOT NULL, text TEXT NOT NULL, createdAt BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat_messages(id SERIAL PRIMARY KEY, channel TEXT NOT NULL, guild TEXT DEFAULT '', userId INTEGER REFERENCES users(id) ON DELETE SET NULL, username TEXT NOT NULL, text TEXT NOT NULL, createdAt BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS battle_log(id SERIAL PRIMARY KEY, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, mode TEXT, text TEXT, createdAt BIGINT);
+CREATE TABLE IF NOT EXISTS game_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updatedAt BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS system_announcements(id SERIAL PRIMARY KEY, title TEXT NOT NULL, text TEXT NOT NULL, active INTEGER DEFAULT 1, createdAt BIGINT NOT NULL, createdBy INTEGER REFERENCES users(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS admin_logs(id SERIAL PRIMARY KEY, adminUserId INTEGER REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, targetType TEXT DEFAULT '', targetId TEXT DEFAULT '', detail JSONB DEFAULT '{}'::jsonb, createdAt BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS quiz_questions(id TEXT PRIMARY KEY, category TEXT NOT NULL, question TEXT NOT NULL, options JSONB NOT NULL, answer INTEGER NOT NULL, explanation TEXT NOT NULL, source TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_quiz_attempts(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, day TEXT NOT NULL, questionIds JSONB NOT NULL, answers JSONB NOT NULL, score INTEGER NOT NULL, rewardExp INTEGER NOT NULL, rewardGold INTEGER NOT NULL, createdAt BIGINT NOT NULL, PRIMARY KEY(playerId,day));`);
-  await q(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hpRegenAt BIGINT;
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'player';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banned INTEGER DEFAULT 0;
+ALTER TABLE players ADD COLUMN IF NOT EXISTS hpRegenAt BIGINT;
 ALTER TABLE guilds ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1;
 ALTER TABLE guilds ADD COLUMN IF NOT EXISTS treasury INTEGER DEFAULT 0;
 ALTER TABLE guilds ADD COLUMN IF NOT EXISTS notice TEXT DEFAULT '';
 ALTER TABLE guilds ADD COLUMN IF NOT EXISTS renameAt BIGINT DEFAULT 0;`);
   await q('UPDATE players SET hpRegenAt=staminaAt WHERE hpRegenAt IS NULL');
+  for (const [key, value] of Object.entries(DEFAULT_GAME_SETTINGS)) {
+    await q('INSERT INTO game_settings(key,value,updatedAt) VALUES($1,$2,$3) ON CONFLICT(key) DO NOTHING', [key, String(value), now()]);
+  }
+  if (ADMIN_USERNAMES.size) {
+    await q('UPDATE users SET role=$1 WHERE username=ANY($2::text[])', ['admin', [...ADMIN_USERNAMES]]);
+  }
   await q(`INSERT INTO guilds(name,ownerPlayerId,createdAt,level,treasury,notice,renameAt)
 SELECT p.guild, MIN(p.id), $1, 1, 0, '', 0 FROM players p
 WHERE COALESCE(p.guild,'') <> ''
@@ -948,6 +1039,40 @@ function publicQuestion(row, includeAnswer = false) {
     out.explanation = row.explanation;
   }
   return out;
+}
+async function getGameSettings() {
+  const rows = await all('SELECT key,value FROM game_settings');
+  const out = { ...DEFAULT_GAME_SETTINGS };
+  for (const row of rows) {
+    if (Object.prototype.hasOwnProperty.call(out, row.key)) out[row.key] = Number(row.value);
+  }
+  return out;
+}
+async function setGameSettings(values = {}) {
+  const allowed = Object.keys(DEFAULT_GAME_SETTINGS);
+  for (const key of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+    const value = Number(values[key]);
+    if (!Number.isFinite(value)) continue;
+    const [min, max] = GAME_SETTING_LIMITS[key] || [0, Number.MAX_SAFE_INTEGER];
+    const normalized = clamp(value, min, max);
+    await q('INSERT INTO game_settings(key,value,updatedAt) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, updatedAt=EXCLUDED.updatedAt', [key, String(normalized), now()]);
+  }
+  return getGameSettings();
+}
+async function isAdminUser(userId, username = '') {
+  const row = await one('SELECT role FROM users WHERE id=$1', [userId]);
+  return row?.role === 'admin' || ADMIN_USERNAMES.has(username);
+}
+async function adminAuth(req, res, next) {
+  if (!await isAdminUser(req.user.id, req.user.username)) return res.status(403).json({ error: '需要管理員權限' });
+  next();
+}
+async function adminLog(adminUserId, action, targetType = '', targetId = '', detail = {}) {
+  await q('INSERT INTO admin_logs(adminUserId,action,targetType,targetId,detail,createdAt) VALUES($1,$2,$3,$4,$5,$6)', [adminUserId, action, targetType, String(targetId || ''), JSON.stringify(detail), now()]);
+}
+async function announcementRows() {
+  return await all('SELECT id,title,text,active,createdAt FROM system_announcements WHERE active=1 ORDER BY id DESC LIMIT 3');
 }
 function normalizeGuildMember(row) {
   return row ? {
@@ -1056,22 +1181,26 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/api/meta', (req, res) => res.json({
-  classes: CLASSES,
-  slots: SLOTS,
-  shop: SHOP,
-  bosses: BOSSES,
-  dungeonMonsters: DUNGEON_MONSTERS,
-  mapMonsters: MAP_MONSTER_MANIFEST,
-  dungeonMaxFloor: DUNGEON_MAX_FLOOR,
-  equipmentLevelCap: EQUIPMENT_LEVEL_CAP,
-  rarities: RARITIES,
-  fatigue: { max: 200, regenPerHour: 25, costs: { training: 10, dungeon: 18, arena: 15, guildWar: 0, boss: 25, dailyQuiz: 0 } },
-  bossSettings: { baseHp: BOSS_BASE_HP, hpMultiplier: BOSS_HP_MULTIPLIER, maxHp: BOSS_MAX_HP, fragmentDropRate: BOSS_FRAGMENT_DROP_RATE, equipmentDropRate: BOSS_EQUIPMENT_DROP_RATE },
-  dungeonSettings: { equipmentDropRate: DUNGEON_EQUIPMENT_DROP_RATE, rewardReset: '每週五 00:00（台北時間）' },
-  forgeSettings: { maxEnhance: MAX_ENHANCE, enhanceRates: ENHANCE_SUCCESS_RATES, enchants: ENCHANTS, specializations: SPECIALIZATIONS },
-  guildRoles: GUILD_ROLES
-}));
+app.get('/api/meta', async (req, res) => {
+  const settings = await getGameSettings();
+  res.json({
+    classes: CLASSES,
+    slots: SLOTS,
+    shop: SHOP,
+    bosses: BOSSES,
+    dungeonMonsters: DUNGEON_MONSTERS,
+    mapMonsters: MAP_MONSTER_MANIFEST,
+    dungeonMaxFloor: DUNGEON_MAX_FLOOR,
+    equipmentLevelCap: EQUIPMENT_LEVEL_CAP,
+    rarities: RARITIES,
+    fatigue: { max: 200, regenPerHour: 25, costs: { training: settings.fatigueTraining, dungeon: settings.fatigueDungeon, arena: settings.fatigueArena, guildWar: 0, boss: settings.fatigueBoss, dailyQuiz: 0 } },
+    bossSettings: { baseHp: BOSS_BASE_HP, hpMultiplier: BOSS_HP_MULTIPLIER, maxHp: BOSS_MAX_HP, fragmentDropRate: settings.bossFragmentDropRate, equipmentDropRate: settings.bossEquipmentDropRate },
+    dungeonSettings: { equipmentDropRate: settings.dungeonEquipmentDropRate, rewardReset: '每週五 00:00（台北時間）' },
+    forgeSettings: { maxEnhance: MAX_ENHANCE, enhanceRates: ENHANCE_SUCCESS_RATES, enchants: ENCHANTS, specializations: SPECIALIZATIONS, materialSkus: [...MATERIAL_SKUS], forgeFee: { base: FORGE_BASE_FEE, perEnhance: FORGE_ENHANCE_FEE } },
+    guildRoles: GUILD_ROLES,
+    announcements: await announcementRows()
+  });
+});
 app.post('/api/register', async (req, res) => {
   const { username, password, classKey } = req.body;
   if (!/^[a-zA-Z0-9_]{3,18}$/.test(username || '')) return res.status(400).json({ error: '帳號需 3-18 字英數底線' });
@@ -1092,23 +1221,31 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   const u = await one('SELECT * FROM users WHERE username=$1', [req.body.username]);
   if (!u || !await bcrypt.compare(req.body.password || '', u.passwordhash)) return res.status(401).json({ error: '帳號或密碼錯誤' });
+  if (Number(u.banned || 0)) return res.status(403).json({ error: '帳號已停權，請聯絡管理員' });
+  if (ADMIN_USERNAMES.has(u.username) && u.role !== 'admin') await q('UPDATE users SET role=$1 WHERE id=$2', ['admin', u.id]);
   res.json({ token: sign(u), username: u.username });
 });
 app.get('/api/me', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   if (!p) return res.status(404).json({ error: '角色不存在' });
-  res.json({ user: req.user, player: p, stats: stats(p), logs: await all('SELECT * FROM battle_log WHERE playerId=$1 ORDER BY id DESC LIMIT 20', [p.id]) });
+  res.json({ user: req.user, player: p, stats: stats(p), inventory: await getInventory(p.id), logs: await all('SELECT * FROM battle_log WHERE playerId=$1 ORDER BY id DESC LIMIT 20', [p.id]) });
 });
 app.get('/api/online', auth, (req, res) => {
   res.json({ users: onlineSnapshot() });
 });
+app.get('/api/inventory', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  res.json({ items: await getInventory(p.id) });
+});
 app.post('/api/rest', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
+  const settings = await getGameSettings();
   const s = stats(p);
   const missing = Math.max(0, s.hpMax - Number(p.hp));
   if (missing <= 0) return res.json({ message: 'HP 已經是滿的，不需要休息。' });
   const heal = Math.min(missing, Math.round(s.hpMax * 0.45));
-  const cost = Math.min(1500, Math.max(30, Math.round(heal * 1.8 + p.level * 25)));
+  const cost = Math.max(0, Math.round(settings.restCost || 100));
   if (p.gold < cost) {
     return res.status(400).json({ error: `金幣不足，本次休息需要 ${cost} 金幣。沒有金幣時仍會每 10 分鐘自動回復少量 HP。` });
   }
@@ -1117,7 +1254,8 @@ app.post('/api/rest', auth, async (req, res) => {
 });
 app.post('/api/training', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
-  if (!await spend(p, 10)) return res.status(400).json({ error: '疲勞不足' });
+  const settings = await getGameSettings();
+  if (!await spend(p, settings.fatigueTraining)) return res.status(400).json({ error: '疲勞不足' });
   const s = stats(p);
   const skill = skillFor(p.classkey);
   const encounter = trainingEncounter();
@@ -1142,13 +1280,14 @@ app.post('/api/training', auth, async (req, res) => {
 });
 app.post('/api/dungeon', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
+  const settings = await getGameSettings();
   const save = currentDungeonSave(p);
   const floor = save.floor;
   const requested = req.body.floor ? Number(req.body.floor) : floor;
   if (Number.isFinite(requested) && requested !== floor) {
     return res.status(400).json({ error: `地下城每週五刷新後必須依序挑戰，目前只能挑戰第 ${floor} 層。` });
   }
-  if (!await spend(p, 18)) return res.status(400).json({ error: '疲勞不足' });
+  if (!await spend(p, settings.fatigueDungeon)) return res.status(400).json({ error: '疲勞不足' });
   const s = stats(p);
   const enemy = monsterForFloor(floor);
   const enemyHp = Math.round(120 + floor * 55 + Math.pow(floor, 2) * 1.35);
@@ -1185,11 +1324,11 @@ app.post('/api/dungeon', auth, async (req, res) => {
     if (!claim) {
       gold = Math.round((120 + floor * 48 + Math.pow(floor, 1.25) * 18) * (1 + clamp(s.effects?.goldBonus || 0, 0, 0.5)));
       await q('INSERT INTO dungeon_weekly_claims(playerId,floor,weekKey,claimedAt) VALUES($1,$2,$3,$4) ON CONFLICT(playerId,floor,weekKey) DO NOTHING', [p.id, floor, save.weekKey, now()]);
-      claimText = `本週第 ${floor} 層獎勵金幣 ${gold} 已領取，下一次週五刷新後會從第 1 層重新開始。`;
+      claimText = `本週第 ${floor} 層獎勵金幣 ${gold} 已領取。`;
     } else {
       claimText = '本週已領過此層金幣獎勵，因此本次不重複給付金幣。';
     }
-    const itemChance = chanceWithEffects(DUNGEON_EQUIPMENT_DROP_RATE, s.effects);
+    const itemChance = chanceWithEffects(settings.dungeonEquipmentDropRate, s.effects);
     if (Math.random() < itemChance) {
       item = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], floor);
     }
@@ -1200,7 +1339,7 @@ app.post('/api/dungeon', auth, async (req, res) => {
   const text = combatNarrative({
     title: `地下城第 ${floor} 層：金融迷宮`, player: p, skill: lastSkill, target: enemy.name, damage: totalDamage, taken: totalTaken,
     outcome: win ? `你在八回合內擊退「${enemy.name}」，通關後地下城存檔推進到第 ${Math.min(DUNGEON_MAX_FLOOR, floor + 1)} 層。` : `「${enemy.name}」守住了本層，你被迫撤退，但系統已暫存第 ${floor} 層進度。`,
-    reward: win ? `${claimText}${item ? ` 同時發現一件 ${item.rarity} 裝備，可選擇是否替換。` : ' 本次沒有發現裝備，地下城裝備掉落率已下修 30%。'}` : '撤退後不會掉落裝備，建議先休息、補藥或強化裝備後再來。',
+    reward: win ? `${claimText}${item ? ` 同時發現一件 ${item.rarity} 裝備，可選擇是否替換。` : ' 本次沒有發現裝備。'}` : '撤退後不會掉落裝備，建議先休息、補藥或強化裝備後再來。',
     image: enemy.image,
     extra: [`V1.5 週五重置與深層難度已啟用：本層敵方 HP ${enemyHp}、攻擊 ${enemyAtk}、防禦 ${enemyDef}，累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`, ...effectNotes.slice(0, 2)]
   });
@@ -1225,13 +1364,16 @@ app.post('/api/enhance', auth, async (req, res) => {
   const current = Number(eq[slot].enhance || 0);
   if (current >= MAX_ENHANCE) return res.status(400).json({ error: `此裝備已達最高強化 +${MAX_ENHANCE}` });
   const next = current + 1;
-  const price = enhanceCost(eq[slot], next);
+  const materialSku = materialForForge('enhance', current);
+  const material = shopItemBySku(materialSku);
+  const price = forgeFee(current);
   if (p.gold < price) return res.status(400).json({ error: '金幣不足' });
+  if (!await consumeInventory(p.id, materialSku, 1)) return res.status(400).json({ error: `缺少 ${material?.[0] || materialSku}` });
   const chance = ENHANCE_SUCCESS_RATES[next] || 0.05;
   const ok = Math.random() < chance;
   const gain = ok ? applyEnhanceStats(eq[slot], next) : null;
   await q('UPDATE players SET gold=gold-$1, equipment=$2 WHERE id=$3', [price, JSON.stringify(eq), p.id]);
-  res.json({ message: ok ? `強化成功！${slot} +${next}，${gain.main === 'atk' ? '攻擊' : gain.main === 'def' ? '防禦' : '專注'}提升 ${gain.step}。` : `強化失敗，消耗 ${price} 金幣。+7～+10 區間成功率較低，請斟酌資源。` });
+  res.json({ message: ok ? `強化成功！消耗 ${material?.[0] || materialSku} 與 ${price} 金幣，${slot} +${next}，${gain.main === 'atk' ? '攻擊' : gain.main === 'def' ? '防禦' : '專注'}提升 ${gain.step}。` : `強化失敗，消耗 ${material?.[0] || materialSku} 與 ${price} 金幣。+7～+10 區間成功率較低，請斟酌資源。` });
 });
 app.post('/api/enchant', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -1239,13 +1381,17 @@ app.post('/api/enchant', auth, async (req, res) => {
   const ench = pick(ENCHANTS);
   const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
   if (!eq[slot]) return res.status(400).json({ error: '沒有此裝備' });
-  const price = 700 + Number(eq[slot].enhance || 0) * 90;
+  const current = Number(eq[slot].enhance || 0);
+  const materialSku = materialForForge('enchant', current);
+  const material = shopItemBySku(materialSku);
+  const price = forgeFee(current);
   if (p.gold < price) return res.status(400).json({ error: '金幣不足' });
+  if (!await consumeInventory(p.id, materialSku, 1)) return res.status(400).json({ error: `缺少 ${material?.[0] || materialSku}` });
   eq[slot].enchant = ench.name;
   eq[slot].enchantDesc = ench.desc;
   eq[slot].enchantEffects = ench.effects;
   await q('UPDATE players SET gold=gold-$1, equipment=$2 WHERE id=$3', [price, JSON.stringify(eq), p.id]);
-  res.json({ message: `附魔成功：${ench.name}，${ench.desc}。` });
+  res.json({ message: `附魔成功：消耗 ${material?.[0] || materialSku} 與 ${price} 金幣，獲得 ${ench.name}，${ench.desc}。` });
 });
 app.post('/api/specialize', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -1254,10 +1400,15 @@ app.post('/api/specialize', auth, async (req, res) => {
   const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
   if (!eq[slot]) return res.status(400).json({ error: '沒有此裝備' });
   if (!SPECIALIZATIONS[spec]) return res.status(400).json({ error: '無此特化類型' });
-  if (p.gold < 1200) return res.status(400).json({ error: '金幣不足' });
+  const current = Number(eq[slot].enhance || 0);
+  const materialSku = materialForForge('specialize', current);
+  const material = shopItemBySku(materialSku);
+  const price = forgeFee(current);
+  if (p.gold < price) return res.status(400).json({ error: '金幣不足' });
+  if (!await consumeInventory(p.id, materialSku, 1)) return res.status(400).json({ error: `缺少 ${material?.[0] || materialSku}` });
   const rule = applySpecialization(eq[slot], spec);
-  await q('UPDATE players SET gold=gold-1200, equipment=$1 WHERE id=$2', [JSON.stringify(eq), p.id]);
-  res.json({ message: `${slot} 已完成 ${spec}：${rule.desc}。` });
+  await q('UPDATE players SET gold=gold-$1, equipment=$2 WHERE id=$3', [price, JSON.stringify(eq), p.id]);
+  res.json({ message: `${slot} 已完成 ${spec}：消耗 ${material?.[0] || materialSku} 與 ${price} 金幣，${rule.desc}。` });
 });
 app.post('/api/shop/buy', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -1269,15 +1420,21 @@ app.post('/api/shop/buy', auth, async (req, res) => {
   if (p.gold < it[2]) return res.status(400).json({ error: '金幣不足' });
   let hp = p.hp;
   let staminaNow = p.stamina;
+  let stored = false;
   if (it[1].startsWith('potion_hp')) hp = Math.min(p.hpmax, p.hp + (it[1].endsWith('_s') ? 60 : it[1].endsWith('_m') ? 150 : 350));
   if (it[1].startsWith('stamina')) staminaNow = Math.min(200, p.stamina + (it[1].includes('20') ? 20 : 50));
+  if (!it[1].startsWith('potion_hp') && !it[1].startsWith('stamina')) {
+    await addInventory(p.id, it[1], 1);
+    stored = true;
+  }
   await q('UPDATE players SET gold=gold-$1, hp=$2, stamina=$3 WHERE id=$4', [it[2], hp, staminaNow, p.id]);
   await q('INSERT INTO purchases(playerId,sku,day,qty) VALUES($1,$2,$3,$4) ON CONFLICT(playerId,sku,day) DO UPDATE SET qty=EXCLUDED.qty', [p.id, it[1], day, (row?.qty || 0) + 1]);
-  res.json({ message: `購買 ${it[0]} 成功。${it[3]}，今日已買 ${(row?.qty || 0) + 1}/${it[4]}。` });
+  res.json({ message: `購買 ${it[0]} 成功。${stored ? '已放入背包。' : it[3]}，今日已買 ${(row?.qty || 0) + 1}/${it[4]}。` });
 });
 app.post('/api/arena', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
-  if (!await spend(p, 15)) return res.status(400).json({ error: '疲勞不足' });
+  const settings = await getGameSettings();
+  if (!await spend(p, settings.fatigueArena)) return res.status(400).json({ error: '疲勞不足' });
   const opp = normalizePlayer(await one('SELECT p.*,u.username FROM players p JOIN users u ON u.id=p.userId WHERE p.id<>$1 ORDER BY RANDOM() LIMIT 1', [p.id]));
   if (!opp) return res.json({ text: '競技場目前沒有對手。請先建立第二位玩家或邀請朋友註冊。' });
   const a = stats(p);
@@ -1561,12 +1718,150 @@ app.get('/api/catalog', (req, res) => {
   res.json(out);
 });
 
+app.get('/api/admin/summary', auth, adminAuth, async (req, res) => {
+  const [users, players, guilds, logs] = await Promise.all([
+    one('SELECT COUNT(*)::int AS count FROM users'),
+    one('SELECT COUNT(*)::int AS count FROM players'),
+    one('SELECT COUNT(*)::int AS count FROM guilds'),
+    all('SELECT al.*,u.username FROM admin_logs al LEFT JOIN users u ON u.id=al.adminUserId ORDER BY al.id DESC LIMIT 20')
+  ]);
+  res.json({
+    users: Number(users?.count || 0),
+    players: Number(players?.count || 0),
+    guilds: Number(guilds?.count || 0),
+    online: onlineSnapshot(),
+    settings: await getGameSettings(),
+    announcements: await all('SELECT * FROM system_announcements ORDER BY id DESC LIMIT 20'),
+    logs
+  });
+});
+app.get('/api/admin/players', auth, adminAuth, async (req, res) => {
+  const term = `%${safeText(req.query.q || '').toLowerCase()}%`;
+  const rows = await all(`SELECT p.id,p.userId AS "userId",u.username,u.role,u.banned,p.classKey AS "classKey",p.level,p.exp,p.gold,p.hp,p.hpMax AS "hpMax",p.stamina,p.guild,p.bossFragments AS "bossFragments"
+    FROM players p JOIN users u ON u.id=p.userId
+    WHERE LOWER(u.username) LIKE $1 OR CAST(p.id AS TEXT) LIKE $1
+    ORDER BY p.id DESC LIMIT 80`, [term]);
+  res.json({ players: rows });
+});
+app.get('/api/admin/player/:id', auth, adminAuth, async (req, res) => {
+  const p = normalizePlayer(await one('SELECT p.*,u.username,u.role,u.banned FROM players p JOIN users u ON u.id=p.userId WHERE p.id=$1', [Number(req.params.id)]));
+  if (!p) return res.status(404).json({ error: '找不到玩家' });
+  res.json({
+    player: p,
+    stats: stats(p),
+    equipment: typeof p.equipment === 'string' ? JSON.parse(p.equipment || '{}') : (p.equipment || {}),
+    inventory: await getInventory(p.id),
+    logs: await all('SELECT * FROM battle_log WHERE playerId=$1 ORDER BY id DESC LIMIT 30', [p.id])
+  });
+});
+app.post('/api/admin/player/:id/update', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const p = await one('SELECT * FROM players WHERE id=$1', [Number(req.params.id)]);
+  if (!p) return res.status(404).json({ error: '找不到玩家' });
+  const fields = ['level', 'exp', 'gold', 'hp', 'hpMax', 'atk', 'def', 'focus', 'stamina', 'bossFragments'];
+  const updates = [];
+  const params = [];
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+      updates.push(`${field}=$${updates.length + 1}`);
+      params.push(Math.max(0, Math.round(Number(req.body[field] || 0))));
+    }
+  }
+  if (!updates.length) return res.status(400).json({ error: '沒有可更新欄位' });
+  params.push(Number(req.params.id));
+  await q(`UPDATE players SET ${updates.join(',')} WHERE id=$${params.length}`, params);
+  await adminLog(req.user.id, 'player_update', 'player', req.params.id, req.body);
+  res.json({ message: '玩家資料已更新。' });
+});
+app.post('/api/admin/player/:id/ban', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const banned = req.body.banned ? 1 : 0;
+  const p = await one('SELECT userId FROM players WHERE id=$1', [Number(req.params.id)]);
+  if (!p) return res.status(404).json({ error: '找不到玩家' });
+  await q('UPDATE users SET banned=$1 WHERE id=$2', [banned, p.userid]);
+  await adminLog(req.user.id, banned ? 'player_ban' : 'player_unban', 'player', req.params.id, { banned });
+  res.json({ message: banned ? '玩家已停權。' : '玩家已解除停權。' });
+});
+app.post('/api/admin/grant/material', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const playerId = Number(req.body.playerId);
+  const sku = String(req.body.sku || '');
+  const qty = Math.max(1, Math.min(9999, Math.round(Number(req.body.qty || 1))));
+  const target = await one('SELECT id FROM players WHERE id=$1', [playerId]);
+  if (!target) return res.status(404).json({ error: '找不到玩家' });
+  if (!INVENTORY_SKUS.has(sku)) return res.status(400).json({ error: '無此道具 SKU' });
+  await addInventory(playerId, sku, qty);
+  await adminLog(req.user.id, 'grant_material', 'player', playerId, { sku, qty });
+  res.json({ message: `已補發 ${shopItemBySku(sku)?.[0] || sku} x${qty}。` });
+});
+app.post('/api/admin/grant/equipment', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const playerId = Number(req.body.playerId);
+  const p = normalizePlayer(await one('SELECT * FROM players WHERE id=$1', [playerId]));
+  if (!p) return res.status(404).json({ error: '找不到玩家' });
+  const slot = SLOTS.includes(req.body.slot) ? req.body.slot : '武器';
+  const level = clamp(req.body.level || p.level || 1, 1, EQUIPMENT_LEVEL_CAP);
+  const boss = !!req.body.boss;
+  const item = itemFor(p.classkey, slot, level, boss);
+  if (boss) item.name = `管理補發・${item.slot}`;
+  const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment || '{}') : (p.equipment || {});
+  eq[slot] = item;
+  await q('UPDATE players SET equipment=$1 WHERE id=$2', [JSON.stringify(eq), p.id]);
+  await adminLog(req.user.id, 'grant_equipment', 'player', playerId, { slot, level, boss });
+  res.json({ message: `已補發並裝備 ${item.name}。`, item });
+});
+app.get('/api/admin/guilds', auth, adminAuth, async (req, res) => {
+  const guilds = await all(`SELECT g.*,COUNT(gm.playerId)::int AS members
+    FROM guilds g LEFT JOIN guild_members gm ON gm.guildName=g.name
+    GROUP BY g.name,g.ownerPlayerId,g.createdAt,g.level,g.treasury,g.notice,g.renameAt
+    ORDER BY members DESC,g.createdAt DESC LIMIT 100`);
+  res.json({ guilds: guilds.map(g => ({ ...g, capacity: guildCapacity(g.level) })) });
+});
+app.post('/api/admin/guild/update', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const name = safeGuildName(req.body.name || '');
+  const guild = await one('SELECT * FROM guilds WHERE name=$1', [name]);
+  if (!guild) return res.status(404).json({ error: '找不到公會' });
+  const level = Math.round(clamp(req.body.level || guild.level || 1, 1, 50));
+  const treasury = Math.round(clamp(req.body.treasury || guild.treasury || 0, 0, 999999999));
+  const notice = safeGuildNotice(req.body.notice ?? guild.notice ?? '');
+  await q('UPDATE guilds SET level=$1,treasury=$2,notice=$3 WHERE name=$4', [level, treasury, notice, name]);
+  await adminLog(req.user.id, 'guild_update', 'guild', name, { level, treasury, notice });
+  res.json({ message: '公會資料已更新。' });
+});
+app.post('/api/admin/settings', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const settings = await setGameSettings(req.body.settings || {});
+  await adminLog(req.user.id, 'settings_update', 'settings', 'game', settings);
+  res.json({ message: '遊戲參數已更新。', settings });
+});
+app.post('/api/admin/announcement', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const title = safeText(req.body.title || '系統公告');
+  const text = safeLongText(req.body.text || '', 500);
+  if (!text) return res.status(400).json({ error: '公告內容不可空白' });
+  await q('INSERT INTO system_announcements(title,text,active,createdAt,createdBy) VALUES($1,$2,1,$3,$4)', [title, text, now(), req.user.id]);
+  await adminLog(req.user.id, 'announcement_create', 'announcement', title, { text });
+  res.json({ message: '公告已發布。' });
+});
+app.post('/api/admin/announcement/:id/toggle', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const active = req.body.active ? 1 : 0;
+  await q('UPDATE system_announcements SET active=$1 WHERE id=$2', [active, Number(req.params.id)]);
+  await adminLog(req.user.id, 'announcement_toggle', 'announcement', req.params.id, { active });
+  res.json({ message: active ? '公告已啟用。' : '公告已停用。' });
+});
+app.get('/api/admin/logs', auth, adminAuth, async (req, res) => {
+  res.json({ logs: await all('SELECT al.*,u.username FROM admin_logs al LEFT JOIN users u ON u.id=al.adminUserId ORDER BY al.id DESC LIMIT 100') });
+});
+
 async function performBossAttack(userId) {
   const p = await getPlayer(userId);
   if (!p) return { status: 404, body: { error: '角色不存在' } };
+  const settings = await getGameSettings();
   const b = await ensureBoss();
   if (b.killed) return { status: 400, body: { error: '今日 BOSS 已被擊退' } };
-  if (!await spend(p, 25)) return { status: 400, body: { error: '疲勞不足' } };
+  if (!await spend(p, settings.fatigueBoss)) return { status: 400, body: { error: '疲勞不足' } };
   const s = stats(p);
   const skill = skillFor(p.classkey);
   const bi = BOSSES[bossIndex()];
@@ -1576,7 +1871,7 @@ async function performBossAttack(userId) {
   const old = await one('SELECT damage FROM boss_damage WHERE day=$1 AND playerId=$2', [todayKey(), p.id]);
   await q('INSERT INTO boss_damage(day,playerId,damage) VALUES($1,$2,$3) ON CONFLICT(day,playerId) DO UPDATE SET damage=EXCLUDED.damage', [todayKey(), p.id, (old?.damage || 0) + damage]);
   let body;
-  if (Math.random() < chanceWithEffects(BOSS_EQUIPMENT_DROP_RATE, s.effects)) {
+  if (Math.random() < chanceWithEffects(settings.bossEquipmentDropRate, s.effects)) {
     const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], EQUIPMENT_LEVEL_CAP, true);
     it.name = `${bi[2]}・${it.slot}`;
     body = {
@@ -1593,8 +1888,8 @@ async function performBossAttack(userId) {
     };
   } else {
     let frag = 0;
-    if (Math.random() < chanceWithEffects(BOSS_FRAGMENT_DROP_RATE, s.effects, 'bossFragment', 0.85)) {
-      frag = 1 + (Math.random() < chanceWithEffects(BOSS_FRAGMENT_BONUS_DROP_RATE, s.effects, 'bossFragment', 0.35) ? 1 : 0);
+    if (Math.random() < chanceWithEffects(settings.bossFragmentDropRate, s.effects, 'bossFragment', 0.85)) {
+      frag = 1 + (Math.random() < chanceWithEffects(settings.bossFragmentBonusDropRate, s.effects, 'bossFragment', 0.35) ? 1 : 0);
       await q('UPDATE players SET bossFragments=bossFragments+$1 WHERE id=$2', [frag, p.id]);
     }
     body = {
