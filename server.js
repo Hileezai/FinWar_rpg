@@ -17,7 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
 const DATABASE_URL = process.env.DATABASE_URL;
-const ADMIN_USERNAMES = MasterTest(String(process.env.ADMIN_USERNAMES || '').split(',').map(x => x.trim()).filter(Boolean));
+const ADMIN_USERNAMES = new Set(String(process.env.ADMIN_USERNAMES || '').split(',').map(x => x.trim()).filter(Boolean));
 
 if (!DATABASE_URL) {
   console.warn('WARNING: DATABASE_URL is not set. PostgreSQL connection will fail until you set it.');
