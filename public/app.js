@@ -10,8 +10,8 @@ let chatMessages = { global: [], guild: [] };
 let chatStatus = { guild: '' };
 let onlineUsers = [];
 let guildState = null;
-const FALLBACK_DUNGEON_MAX_FLOOR = 100;
-const FALLBACK_EQUIPMENT_LEVEL_CAP = 100;
+const FALLBACK_DUNGEON_MAX_FLOOR = 200;
+const FALLBACK_EQUIPMENT_LEVEL_CAP = 150;
 
 const names = {
   home: '角色',
@@ -195,7 +195,7 @@ function render() {
   let c = '';
   if (page === 'home') {
     const cls = meta.classes[p.classKey];
-    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}${effectText(it)}</div></div>`).join('')}</div></div></div><div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
+    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>需求 Lv.${it.requiredLevel || 1}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}${effectText(it)}</div></div>`).join('')}</div></div></div>${storageGrid()}<div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
   }
   if (page === 'training') {
     const firstMap = meta.mapMonsters?.maps?.[0];
@@ -227,7 +227,7 @@ function render() {
     c = `<div class="grid">${meta.shop.map(it => `<div class="card shop-card">${img(shopImage(it), 'item-icon-lg', it[0])}<h3>${esc(it[0])}</h3><p>${esc(it[3])}</p><p>價格 ${it[2]}｜每日庫存 ${it[4]}</p><button onclick="buy('${it[1]}')">購買</button></div>`).join('')}</div>`;
   }
   if (page === 'forge') {
-    c = `<div class="card scene-card">${img('assets/images/scenes/volcano.png', 'scene-img', '鍛造區')}<div><h2>強化、附魔、特化區</h2><select id="slot">${Object.keys(eq).map(s => `<option>${esc(s)}</option>`).join('')}</select><button onclick="forge('enhance')">強化</button><button onclick="forge('enchant')">附魔</button><select id="spec"><option>攻擊特化</option><option>防禦特化</option><option>HP特化</option><option>專注特化</option></select><button onclick="forge('specialize')">特化</button><p class="small">強化需消耗強化晶片 I 與工本費；若背包持有輔助晶片，下一次強化會自動消耗 1 個並提升 15% 成功率。附魔與特化也會消耗對應道具與工本費。</p></div></div>${inventoryGrid()}`;
+    c = `<div class="card scene-card">${img('assets/images/scenes/volcano.png', 'scene-img', '鍛造區')}<div><h2>強化、附魔、特化區</h2><select id="slot">${Object.keys(eq).map(s => `<option>${esc(s)}</option>`).join('')}</select><button onclick="forge('enhance')">強化</button><button onclick="forge('enchant')">附魔</button><select id="spec"><option>攻擊特化</option><option>防禦特化</option><option>HP特化</option><option>專注特化</option></select><button onclick="forge('specialize')">特化</button><p class="small">強化需消耗強化晶片 I 與工本費；若背包持有輔助晶片，下一次強化會自動消耗 1 個並提升 15% 成功率。附魔與特化也會消耗對應道具與工本費。</p></div></div>${inventoryGrid()}${storageGrid()}`;
   }
   if (page === 'admin') {
     c = me.user.isAdmin ? `<div class="card"><h2>管理後台</h2><div id="adminBox">讀取中...</div></div>` : `<div class="card"><h2>管理後台</h2><p class="danger">需要管理員權限。</p></div>`;
@@ -334,6 +334,15 @@ function inventoryGrid() {
   const mats = items.filter(it => it.material || Number(it.qty || 0) > 0);
   return `<div class="card"><h3>鍛造背包</h3><div class="bag-grid">${mats.map(it => `<div class="bag-slot ${Number(it.qty || 0) <= 0 ? 'empty' : ''}">${img(it.image, 'item-icon-lg', it.name)}<b>${esc(it.name)}</b><span>x${it.qty || 0}</span></div>`).join('')}</div></div>`;
 }
+function storageGrid() {
+  const items = me.storage || [];
+  return `<div class="card"><h3>裝備暫存箱 ${items.length}/${me.storageLimit || 20}</h3><div class="storage-grid">${items.length ? items.map(row => {
+    const it = row.item || {};
+    const need = Number(it.requiredLevel || 1);
+    const can = Number(me.player.level || 1) >= need;
+    return `<div class="storage-slot">${itemHtml(it)}<div class="storage-actions">${can ? `<button onclick="equipStored(${row.id})">裝備</button>` : `<span class="danger">需要 Lv.${need}</span>`}<button onclick="discardStored(${row.id})">丟棄</button></div></div>`;
+  }).join('') : '<p class="small">暫存箱目前沒有裝備。</p>'}</div></div>`;
+}
 function statDiff(newIt, oldIt, key) {
   const diff = Number(newIt?.[key] || 0) - Number(oldIt?.[key] || 0);
   const label = key === 'atk' ? '攻' : key === 'def' ? '防' : '專';
@@ -342,11 +351,13 @@ function statDiff(newIt, oldIt, key) {
 }
 function itemHtml(it, title = '') {
   if (!it) return `<div class="loot-card muted"><p>${esc(title || '空裝備欄')}</p></div>`;
-  return `<div class="loot-card">${img(itemImage(it), 'item-icon-lg', it.name)}<p>${title ? `<b>${esc(title)}</b><br>` : ''}<span class="rarity-${it.rarity}">${esc(it.name)}</span><br>${esc(it.slot)}｜${esc(it.rarity)}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance || 0}｜${esc(it.enchant || '未附魔')}｜${esc(it.spec || '未特化')}${effectText(it)}</p></div>`;
+  return `<div class="loot-card">${img(itemImage(it), 'item-icon-lg', it.name)}<p>${title ? `<b>${esc(title)}</b><br>` : ''}<span class="rarity-${it.rarity}">${esc(it.name)}</span><br>${esc(it.slot)}｜${esc(it.rarity)}｜裝備 Lv.${it.level || 1}｜需求 Lv.${it.requiredLevel || 1}<br>攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance || 0}｜${esc(it.enchant || '未附魔')}｜${esc(it.spec || '未特化')}${effectText(it)}</p></div>`;
 }
 function compareItemHtml(newIt) {
   const current = eqObj(me?.player?.equipment)[newIt.slot];
   const delta = itemScore(newIt) - itemScore(current);
+  const need = Number(newIt.requiredLevel || 1);
+  const canEquip = Number(me?.player?.level || 1) >= need;
   return `<div class="compare-grid">
     <div>${itemHtml(current, `目前裝備：${newIt.slot}`)}</div>
     <div>${itemHtml(newIt, '新獲得裝備')}</div>
@@ -356,15 +367,32 @@ function compareItemHtml(newIt) {
     <span class="${delta >= 0 ? 'ok' : 'danger'}">綜合評分 ${delta >= 0 ? '+' : ''}${Math.round(delta)}</span>
   </div>
   <div class="modal-actions">
-    <button class="equip-action equip-new" onclick="equipPending()"><span class="action-icon icon-equip"></span>替換成新裝備</button>
+    ${canEquip ? `<button class="equip-action equip-new" onclick="equipPending()"><span class="action-icon icon-equip"></span>替換成新裝備</button>` : `<button class="equip-action equip-new" onclick="storePending()"><span class="action-icon icon-equip"></span>放入暫存箱</button>`}
     <button class="equip-action keep-current" onclick="this.closest('.modal').remove()"><span class="action-icon icon-keep"></span>保留目前裝備</button>
   </div>`;
 }
 async function equipPending() {
   if (!pendingItem) return;
-  await api('/api/equip', { method: 'POST', body: JSON.stringify({ item: pendingItem }) });
-  document.querySelector('.modal')?.remove();
-  await refresh();
+  try {
+    await api('/api/equip', { method: 'POST', body: JSON.stringify({ item: pendingItem }) });
+    document.querySelector('.modal')?.remove();
+    await refresh();
+  } catch (e) { alert(e.message); }
+}
+async function storePending() {
+  if (!pendingItem) return;
+  try {
+    await api('/api/storage/add', { method: 'POST', body: JSON.stringify({ item: pendingItem }) });
+    document.querySelector('.modal')?.remove();
+    await refresh();
+  } catch (e) { alert(e.message); }
+}
+async function equipStored(id) {
+  try { await toast(await api('/api/storage/equip/' + id, { method: 'POST' })); } catch (e) { alert(e.message); }
+}
+async function discardStored(id) {
+  if (!confirm('確定要丟棄這件暫存裝備嗎？')) return;
+  try { await toast(await api('/api/storage/discard/' + id, { method: 'POST' })); } catch (e) { alert(e.message); }
 }
 async function buy(sku) {
   try { await toast(await api('/api/shop/buy', { method: 'POST', body: JSON.stringify({ sku }) })); } catch (e) { modal(esc(e.message || '已無庫存')); }
@@ -480,7 +508,7 @@ function adminHtml(summary, players, guilds) {
     ${adminSettingInput('bossFragmentDropRate','BOSS碎片率',settings.bossFragmentDropRate)}
     ${adminSettingInput('bossFragmentBonusDropRate','BOSS額外碎片率',settings.bossFragmentBonusDropRate)}
   </div><button onclick="adminSaveSettings()">儲存參數</button></div>
-  <div class="panel"><h3>道具 / 資源補償</h3><div class="settings-grid"><input id="grantPlayerId" placeholder="玩家ID"><select id="grantSku">${meta.shop.map(it => `<option value="${it[1]}">${esc(it[0])}</option>`).join('')}</select><input id="grantQty" type="number" min="1" value="1"><button onclick="adminGrantMaterial()">補發道具</button><input id="grantGold" type="number" min="0" value="0" placeholder="補償金幣"><input id="grantStamina" type="number" min="0" max="200" value="0" placeholder="補償疲勞"><button onclick="adminGrantResource()">補償金幣 / 疲勞</button></div></div>
+  <div class="panel"><h3>道具 / 資源補償</h3><div class="settings-grid"><input id="grantPlayerId" placeholder="玩家ID"><select id="grantSku">${meta.shop.map(it => `<option value="${it[1]}">${esc(it[0])}</option>`).join('')}</select><input id="grantQty" type="number" min="1" value="1"><button onclick="adminGrantMaterial()">補發道具</button><input id="grantGold" type="number" min="1" value="1000" placeholder="補償金幣"><button onclick="adminGrantGold()">補償金幣</button><input id="grantStamina" type="number" min="1" max="200" value="50" placeholder="補償疲勞"><button onclick="adminGrantStamina()">補償疲勞</button></div></div>
   <div class="panel"><h3>系統公告</h3><input id="annTitle" placeholder="公告標題"><textarea id="annText" maxlength="500" placeholder="公告內容"></textarea><button onclick="adminCreateAnnouncement()">發布公告</button><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>標題</th><th>內容</th><th>狀態</th><th>操作</th></tr></thead><tbody>${announcements || `<tr><td colspan="4" class="small">尚無公告</td></tr>`}</tbody></table></div></div>
   <div class="panel"><h3>管理員操作紀錄</h3><div class="log">${logs || '<p class="small">尚無紀錄</p>'}</div></div>`;
 }
@@ -524,6 +552,12 @@ async function adminGrantMaterial() {
 }
 async function adminGrantResource() {
   await adminPost('/api/admin/grant/resource', { playerId: grantPlayerId.value, gold: grantGold.value, stamina: grantStamina.value });
+}
+async function adminGrantGold() {
+  await adminPost('/api/admin/grant/gold', { playerId: $('#grantPlayerId').value, gold: $('#grantGold').value });
+}
+async function adminGrantStamina() {
+  await adminPost('/api/admin/grant/stamina', { playerId: $('#grantPlayerId').value, stamina: $('#grantStamina').value });
 }
 async function adminEditGuild(name, level, treasury, notice) {
   modal(`<h3>公會管理：${esc(name)}</h3><label>等級<input id="admGuildLevel" type="number" value="${level}"></label><label>金庫<input id="admGuildTreasury" type="number" value="${treasury}"></label><textarea id="admGuildNotice">${esc(notice || '')}</textarea><button onclick="adminSaveGuild('${encodeURIComponent(name)}')">儲存公會</button>`);

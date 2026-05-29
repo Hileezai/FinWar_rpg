@@ -160,10 +160,12 @@ const CLASSES = {
 };
 
 const SLOTS = ['頭', '衣服', '褲子', '鞋子', '武器', '副武器', '飾品一', '飾品二'];
-const DUNGEON_MAX_FLOOR = 100;
-const EQUIPMENT_LEVEL_CAP = 100;
-const EQUIPMENT_ASSET_COUNT = 100;
-const RARITIES = ['普通', '精良', '稀有', '卓越', '史詩', '傳說', '遠古', '神話', '祕寶', '星鑄'];
+const DUNGEON_MAX_FLOOR = 200;
+const EQUIPMENT_LEVEL_CAP = 150;
+const EQUIPMENT_ASSET_COUNT = 150;
+const EQUIPMENT_STORAGE_LIMIT = 20;
+const RARITIES = ['普通', '精良', '稀有', '卓越', '史詩', '傳說', '遠古', '神話', '祕寶', '星鑄', '深淵', '星界', '龍焰', '神域', '永恆'];
+const HIGH_TIER_NAMES = ['深淵', '星界', '龍焰', '神域', '永恆'];
 const ARMOR_SLOTS = ['頭', '衣服', '褲子', '鞋子'];
 const SLOT_ASSET_SLUGS = {
   頭: 'heads',
@@ -251,7 +253,7 @@ const SHOP = [
   ['大型資本藥水', 'potion_hp_l', 700, '恢復 350 HP', 1, 'assets/images/items/potion_hp_l.png'],
   ['風險緩釋卷軸', 'buff_def', 500, '下一場防禦 +20%', 2, 'assets/images/items/scroll_revive.png'],
   ['市場動能卷軸', 'buff_atk', 500, '下一場攻擊 +20%', 2, 'assets/images/items/scroll_enhance.png'],
-  ['資安補丁', 'cleanse', 360, '移除負面狀態', 2, 'assets/images/items/scroll_special.png'],
+  ['資安補丁', 'cleanse', 360, '下一場異常抵抗與減傷', 2, 'assets/images/items/scroll_special.png'],
   ['法遵祝禱', 'buff_focus', 420, '下一場專注 +25%', 2, 'assets/images/items/scroll_enchant.png'],
   ['疲勞咖啡', 'stamina_20', 260, '恢復 20 疲勞', 3, 'assets/images/items/stamina_50.png'],
   ['特調能量飲', 'stamina_50', 680, '恢復 50 疲勞', 1, 'assets/images/items/universal_potion.png'],
@@ -262,8 +264,8 @@ const SHOP = [
   ['稽核護符', 'audit_charm', 250, '降低地下城損傷', 3, 'assets/images/equipment/accessories/accessory_01.png'],
   ['交易靴油', 'speed_oil', 220, '競技場先手率提升', 3, 'assets/images/equipment/accessories/accessory_06.png'],
   ['KYC 透鏡', 'kyc_lens', 300, '提高掉寶品質', 2, 'assets/images/equipment/accessories/accessory_08.png'],
-  ['備援磁帶', 'backup_tape', 260, '死亡時降低金幣損失', 2, 'assets/images/items/scroll_revive.png'],
-  ['清算憑證', 'clear_token', 180, '公會戰消耗品', 5, 'assets/images/items/coin_bag.png'],
+  ['備援磁帶', 'backup_tape', 260, 'PK 敗北降低金幣損失', 2, 'assets/images/items/scroll_revive.png'],
+  ['清算憑證', 'clear_token', 180, 'BOSS 戰碎片與技能小幅提升', 5, 'assets/images/items/coin_bag.png'],
   ['合規印章', 'compliance_seal', 520, 'BOSS 戰額外獎勵率', 2, 'assets/images/equipment/accessories/accessory_07.png'],
   ['防火牆符文', 'firewall_rune', 540, '資安類傷害減免', 2, 'assets/images/equipment/accessories/accessory_04.png'],
   ['VAR 石板', 'var_tablet', 540, '市場類傷害減免', 2, 'assets/images/equipment/accessories/accessory_05.png'],
@@ -275,7 +277,7 @@ const SHOP = [
   ['帳務便當', 'bento', 160, '休息額外回復', 4, 'assets/images/items/potion_hp_s.png'],
   ['客服號角', 'service_horn', 220, '公會貢獻提升', 3, 'assets/images/equipment/accessories/accessory_03.png'],
   ['冷錢包', 'cold_wallet', 600, 'PK 敗北保護', 2, 'assets/images/items/coin_bag.png'],
-  ['董事會邀請函', 'board_invite', 1500, '高階活動入場券', 1, 'assets/images/items/scroll_revive.png']
+  ['董事會邀請函', 'board_invite', 1500, '地下城探索掉寶與生存提升', 1, 'assets/images/items/scroll_revive.png']
 ];
 const INVENTORY_SKUS = new Set(SHOP.map(x => x[1]));
 
@@ -535,6 +537,26 @@ function safeGuildNotice(v) { return String(v ?? '').replace(/[<>&]/g, '').repla
 function safeLongText(v, max = 500) { return String(v ?? '').replace(/[<>&]/g, '').replace(/\s+/g, ' ').trim().slice(0, max); }
 function clamp(n, min, max) { return Math.max(min, Math.min(max, Number(n) || 0)); }
 function rarityForLevel(level) { return RARITIES[Math.min(RARITIES.length - 1, Math.floor((Number(level || 1) - 1) / 10))]; }
+function requiredLevelForEquipment(level = 1) {
+  const lvl = Math.max(1, Number(level || 1));
+  if (lvl <= 20) return 1;
+  if (lvl <= 40) return 5;
+  if (lvl <= 60) return 10;
+  if (lvl <= 80) return 15;
+  if (lvl <= 100) return 20;
+  if (lvl <= 120) return 30;
+  if (lvl <= 140) return 40;
+  return 50;
+}
+function highTierLabel(level = 1) {
+  if (Number(level || 1) <= 100) return '';
+  return HIGH_TIER_NAMES[Math.min(HIGH_TIER_NAMES.length - 1, Math.floor((Number(level || 101) - 101) / 10))];
+}
+function equipmentLevelForDungeonFloor(floor = 1) {
+  const f = Math.max(1, Number(floor || 1));
+  if (f <= 100) return Math.min(100, Math.round(f));
+  return Math.min(EQUIPMENT_LEVEL_CAP, 100 + Math.ceil((f - 100) / 2));
+}
 function hashInt(s) {
   return parseInt(crypto.createHash('sha256').update(s).digest('hex').slice(0, 8), 16);
 }
@@ -689,6 +711,51 @@ async function consumeInventory(playerId, sku, qty = 1) {
   await q('UPDATE inventory SET qty=qty-$1 WHERE playerId=$2 AND sku=$3', [amount, playerId, sku]);
   return true;
 }
+async function storageRows(playerId) {
+  const rows = await all('SELECT id,item,createdAt FROM equipment_storage WHERE playerId=$1 ORDER BY id DESC', [playerId]);
+  return rows.map(r => ({ id: r.id, item: typeof r.item === 'string' ? JSON.parse(r.item) : r.item, createdAt: Number(r.createdat || r.createdAt || 0) }));
+}
+async function addStoredEquipment(playerId, item) {
+  const count = await one('SELECT COUNT(*)::int AS count FROM equipment_storage WHERE playerId=$1', [playerId]);
+  if (Number(count?.count || 0) >= EQUIPMENT_STORAGE_LIMIT) return { ok: false, error: `裝備暫存箱已滿（${EQUIPMENT_STORAGE_LIMIT} 件）。` };
+  await q('INSERT INTO equipment_storage(playerId,item,createdAt) VALUES($1,$2,$3)', [playerId, JSON.stringify(item), now()]);
+  return { ok: true };
+}
+async function consumeNextBattleBuff(playerId, mode = '') {
+  const effects = {};
+  const notes = [];
+  const tryUse = async (sku, effect, text) => {
+    if (await consumeInventory(playerId, sku, 1)) {
+      Object.entries(effect).forEach(([k, v]) => { effects[k] = (effects[k] || 0) + v; });
+      notes.push(text);
+    }
+  };
+  await tryUse('buff_atk', { atkRate: 0.2 }, '市場動能卷軸啟用，本場攻擊 +20%。');
+  await tryUse('buff_def', { defRate: 0.2 }, '風險緩釋卷軸啟用，本場防禦 +20%。');
+  await tryUse('buff_focus', { focusRate: 0.25 }, '法遵祝禱啟用，本場專注 +25%。');
+  await tryUse('cleanse', { damageReduction: 0.05, evasion: 0.02 }, '資安補丁啟用，本場異常狀態與傷害小幅降低。');
+  if (mode === 'dungeon') await tryUse('audit_charm', { damageReduction: 0.15 }, '稽核護符啟用，地下城受傷降低 15%。');
+  if (mode === 'dungeon') await tryUse('board_invite', { dropRate: 0.12, damageReduction: 0.08 }, '董事會邀請函啟用，本場高階探索掉寶與生存率提升。');
+  if (mode === 'arena') await tryUse('speed_oil', { focusRate: 0.1, skillRate: 0.06 }, '交易靴油啟用，競技場先手與技能率提升。');
+  if (mode === 'boss') await tryUse('compliance_seal', { bossRewardRate: 0.15, bossFragment: 0.08 }, '合規印章啟用，BOSS 結算與碎片機率提升。');
+  if (mode === 'boss') await tryUse('clear_token', { bossFragment: 0.04, skillDamage: 0.03 }, '清算憑證啟用，BOSS 碎片與技能表現小幅提升。');
+  await tryUse('kyc_lens', { dropRate: 0.06 }, 'KYC 透鏡啟用，本場掉寶判定提升。');
+  await tryUse('firewall_rune', { damageReduction: 0.08 }, '防火牆符文啟用，本場傷害減免提升。');
+  await tryUse('var_tablet', { damageReduction: 0.08 }, 'VAR 石板啟用，本場市場風險衝擊降低。');
+  await tryUse('aml_incense', { evasion: 0.04 }, 'AML 香爐啟用，本場閃避小幅提升。');
+  await tryUse('data_lake', { skillDamage: 0.05, skillRate: 0.04 }, '資料湖瓶啟用，本場技能效果提升。');
+  await tryUse('rate_compass', { atkRate: 0.08 }, '利率羅盤啟用，本場攻擊小幅提升。');
+  await tryUse('fx_goggles', { evasion: 0.04 }, '匯率護目鏡啟用，本場閃避小幅提升。');
+  await tryUse('margin_pouch', { goldBonus: 0.08 }, '保證金腰包啟用，本場金幣獎勵小幅提升。');
+  return { effects, notes };
+}
+function applyTemporaryEffects(s, effects = {}) {
+  const out = { ...s, effects: mergeEffects(s.effects, effects) };
+  out.atk = Math.round(out.atk * (1 + clamp(effects.atkRate || 0, -0.5, 1)));
+  out.def = Math.round(out.def * (1 + clamp(effects.defRate || 0, -0.5, 1)));
+  out.focus = Math.round(out.focus * (1 + clamp(effects.focusRate || 0, -0.5, 1)));
+  return out;
+}
 function requireConfirm(req, res) {
   if (String(req.body.confirm || '').trim() !== 'CONFIRM') {
     res.status(400).json({ error: '高風險操作需輸入 CONFIRM 二次確認。' });
@@ -729,13 +796,15 @@ function itemFor(clsKey, slot, level, boss = false) {
   const rare = boss ? 'BOSS神鑄' : rarityForLevel(level);
   const lvl = Math.max(1, Math.min(EQUIPMENT_LEVEL_CAP, Number(level || 1)));
   const tier = Math.min(RARITIES.length - 1, Math.floor((lvl - 1) / 10));
-  const base = lvl * 2.8 + tier * 18 + (boss ? 120 : 0);
+  const highTier = highTierLabel(lvl);
+  const base = lvl * 2.8 + tier * 18 + Math.max(0, lvl - 100) * 2.2 + (boss ? 120 : 0);
   return {
     clsKey,
     slot,
     level: lvl,
+    requiredLevel: requiredLevelForEquipment(lvl),
     rarity: rare,
-    name: `${c.name}${boss ? '・世界王' : '・第' + lvl + '層'}${slot}`,
+    name: `${c.name}${boss ? '・世界王' : highTier ? '・' + highTier + '第' + lvl + '層' : '・第' + lvl + '層'}${slot}`,
     atk: Math.round(base * (slot.includes('武器') ? 1.5 : 0.35)),
     def: Math.round(base * (ARMOR_SLOTS.includes(slot) ? 0.9 : 0.25)),
     focus: Math.round(base * (slot.includes('飾品') || slot === '副武器' ? 1.1 : 0.3)),
@@ -791,6 +860,7 @@ function stats(player) {
   const s = { hpMax: player.hpmax, atk: player.atk, def: player.def, focus: player.focus, effects: {} };
   Object.values(eq).forEach((it) => {
     if (!it) return;
+    if (Number(it.requiredLevel || requiredLevelForEquipment(it.level || 1)) > Number(player.level || 1)) return;
     const mult = 1 + (it.enhance || 0) * 0.03;
     s.atk += Math.round((it.atk || 0) * mult);
     s.def += Math.round((it.def || 0) * mult);
@@ -977,11 +1047,13 @@ async function initDb() {
   await q(`CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, passwordHash TEXT NOT NULL, createdAt BIGINT NOT NULL, role TEXT DEFAULT 'player', banned INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS players(id SERIAL PRIMARY KEY, userId INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE, classKey TEXT NOT NULL, level INTEGER NOT NULL, exp INTEGER NOT NULL, gold INTEGER NOT NULL, hp INTEGER NOT NULL, hpMax INTEGER NOT NULL, atk INTEGER NOT NULL, def INTEGER NOT NULL, focus INTEGER NOT NULL, stamina INTEGER NOT NULL, staminaAt BIGINT NOT NULL, hpRegenAt BIGINT, equipment JSONB NOT NULL, dungeonSave JSONB NOT NULL, guild TEXT DEFAULT '', bossFragments INTEGER DEFAULT 0, arenaPoints INTEGER DEFAULT 1000, arenaWins INTEGER DEFAULT 0, arenaLosses INTEGER DEFAULT 0, arenaStreak INTEGER DEFAULT 0, arenaBest INTEGER DEFAULT 1000);
 CREATE TABLE IF NOT EXISTS inventory(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, sku TEXT NOT NULL, qty INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(playerId,sku));
+CREATE TABLE IF NOT EXISTS equipment_storage(id SERIAL PRIMARY KEY, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, item JSONB NOT NULL, createdAt BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS dungeon_claims(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, floor INTEGER, claimedAt BIGINT, PRIMARY KEY(playerId,floor));
 CREATE TABLE IF NOT EXISTS dungeon_weekly_claims(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, floor INTEGER, weekKey TEXT, claimedAt BIGINT, PRIMARY KEY(playerId,floor,weekKey));
 CREATE TABLE IF NOT EXISTS purchases(playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, sku TEXT, day TEXT, qty INTEGER, PRIMARY KEY(playerId,sku,day));
 CREATE TABLE IF NOT EXISTS boss_state(day TEXT PRIMARY KEY, bossIdx INTEGER, hp INTEGER, maxHp INTEGER, killed INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS boss_damage(day TEXT, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, damage INTEGER, PRIMARY KEY(day,playerId));
+CREATE TABLE IF NOT EXISTS boss_kill_rewards(day TEXT NOT NULL, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, fragments INTEGER DEFAULT 0, gold INTEGER DEFAULT 0, itemSku TEXT DEFAULT '', createdAt BIGINT NOT NULL, PRIMARY KEY(day,playerId));
 CREATE TABLE IF NOT EXISTS guilds(name TEXT PRIMARY KEY, ownerPlayerId INTEGER REFERENCES players(id) ON DELETE SET NULL, createdAt BIGINT NOT NULL, level INTEGER DEFAULT 1, treasury INTEGER DEFAULT 0, notice TEXT DEFAULT '', renameAt BIGINT DEFAULT 0);
 CREATE TABLE IF NOT EXISTS guild_members(guildName TEXT REFERENCES guilds(name) ON DELETE CASCADE ON UPDATE CASCADE, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'member', joinedAt BIGINT NOT NULL, donated INTEGER DEFAULT 0, PRIMARY KEY(guildName,playerId));
 CREATE TABLE IF NOT EXISTS guild_applications(id SERIAL PRIMARY KEY, guildName TEXT REFERENCES guilds(name) ON DELETE CASCADE ON UPDATE CASCADE, playerId INTEGER REFERENCES players(id) ON DELETE CASCADE, message TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', createdAt BIGINT NOT NULL, decidedAt BIGINT, decidedBy INTEGER REFERENCES players(id) ON DELETE SET NULL);
@@ -1046,9 +1118,9 @@ async function grantExpGold(player, expGain, goldGain) {
     exp -= level * 120;
     level += 1;
     levelUps += 1;
-    hpMax += 12;
+    hpMax += 18;
     atk += 2;
-    def += 1;
+    def += 2;
     focus += 1;
     hp = hpMax;
   }
@@ -1265,7 +1337,7 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/me', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   if (!p) return res.status(404).json({ error: '角色不存在' });
-  res.json({ user: req.user, player: p, stats: stats(p), inventory: await getInventory(p.id), logs: await all('SELECT * FROM battle_log WHERE playerId=$1 ORDER BY id DESC LIMIT 20', [p.id]) });
+  res.json({ user: req.user, player: p, stats: stats(p), inventory: await getInventory(p.id), storage: await storageRows(p.id), storageLimit: EQUIPMENT_STORAGE_LIMIT, logs: await all('SELECT * FROM battle_log WHERE playerId=$1 ORDER BY id DESC LIMIT 20', [p.id]) });
 });
 app.get('/api/online', auth, (req, res) => {
   res.json({ users: onlineSnapshot() });
@@ -1275,19 +1347,57 @@ app.get('/api/inventory', auth, async (req, res) => {
   if (!p) return res.status(404).json({ error: '角色不存在' });
   res.json({ items: await getInventory(p.id) });
 });
+app.get('/api/storage', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  res.json({ items: await storageRows(p.id), limit: EQUIPMENT_STORAGE_LIMIT });
+});
+app.post('/api/storage/add', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  const item = req.body.item;
+  if (!p || !item || !SLOTS.includes(item.slot)) return res.status(400).json({ error: '裝備格式錯誤' });
+  item.requiredLevel = requiredLevelForEquipment(item.level || 1);
+  item.image = assetForItem(item.slot, item.level || 1, item.clsKey || p.classkey, item.rarity === 'BOSS神鑄');
+  const result = await addStoredEquipment(p.id, item);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json({ message: `已放入裝備暫存箱：${item.name}` });
+});
+app.post('/api/storage/equip/:id', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  const row = await one('SELECT * FROM equipment_storage WHERE id=$1 AND playerId=$2', [Number(req.params.id), p.id]);
+  if (!row) return res.status(404).json({ error: '找不到暫存裝備' });
+  const item = typeof row.item === 'string' ? JSON.parse(row.item) : row.item;
+  const need = Number(item.requiredLevel || requiredLevelForEquipment(item.level || 1));
+  if (Number(p.level || 1) < need) return res.status(400).json({ error: `玩家等級不足，需要 Lv.${need} 才能裝備。` });
+  const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
+  eq[item.slot] = item;
+  await transaction(async tx => {
+    await tx('UPDATE players SET equipment=$1 WHERE id=$2', [JSON.stringify(eq), p.id]);
+    await tx('DELETE FROM equipment_storage WHERE id=$1 AND playerId=$2', [Number(req.params.id), p.id]);
+  });
+  res.json({ message: `已從暫存箱裝備 ${item.name}` });
+});
+app.post('/api/storage/discard/:id', auth, async (req, res) => {
+  const p = await getPlayer(req.user.id);
+  if (!p) return res.status(404).json({ error: '角色不存在' });
+  await q('DELETE FROM equipment_storage WHERE id=$1 AND playerId=$2', [Number(req.params.id), p.id]);
+  res.json({ message: '已丟棄暫存裝備。' });
+});
 app.post('/api/rest', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   const settings = await getGameSettings();
   const s = stats(p);
   const missing = Math.max(0, s.hpMax - Number(p.hp));
   if (missing <= 0) return res.json({ message: 'HP 已經是滿的，不需要休息。' });
-  const heal = Math.min(missing, Math.round(s.hpMax * 0.45));
+  const bento = await consumeInventory(p.id, 'bento', 1);
+  const heal = Math.min(missing, Math.round(s.hpMax * (bento ? 0.65 : 0.45)));
   const cost = Math.max(0, Math.round(settings.restCost || 100));
   if (p.gold < cost) {
     return res.status(400).json({ error: `金幣不足，本次休息需要 ${cost} 金幣。沒有金幣時仍會每 10 分鐘自動回復少量 HP。` });
   }
   await q('UPDATE players SET hp=$1, gold=gold-$2, hpRegenAt=$3 WHERE id=$4', [p.hp + heal, cost, now(), p.id]);
-  res.json({ message: `你在分行休息室休整，花費 ${cost} 金幣並恢復 ${heal} HP。沒有金幣時也會每 10 分鐘自動回復少量 HP。` });
+  res.json({ message: `你在分行休息室休整，花費 ${cost} 金幣並恢復 ${heal} HP。${bento ? '帳務便當已自動消耗，休息回復量提升。' : ''}沒有金幣時也會每 10 分鐘自動回復少量 HP。` });
 });
 app.post('/api/training', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -1326,26 +1436,33 @@ app.post('/api/dungeon', auth, async (req, res) => {
   }
   const floor = clamp(requested, 1, latestFloor);
   const replay = floor < latestFloor;
+  const baseStats = stats(p);
+  if (Number(p.hp || 0) <= Math.max(1, Math.round(baseStats.hpMax * 0.1))) return res.status(400).json({ error: 'HP 過低，請先休息或使用藥水再挑戰地下城。' });
   if (!await spend(p, settings.fatigueDungeon)) return res.status(400).json({ error: '疲勞不足' });
-  const s = stats(p);
+  const buff = await consumeNextBattleBuff(p.id, 'dungeon');
+  const s = applyTemporaryEffects(baseStats, buff.effects);
   const enemy = monsterForFloor(floor);
-  const enemyHp = Math.round(120 + floor * 55 + Math.pow(floor, 2) * 1.35);
-  const enemyAtk = Math.round(26 + floor * 5.8 + Math.pow(floor, 1.34) * 2.05);
-  const enemyDef = Math.round(12 + floor * 4.6 + Math.pow(floor, 1.3) * 1.75);
+  const highScale = floor > 100 ? 1 + Math.pow(floor - 100, 1.18) / 52 : 1;
+  const bossNode = floor % 50 === 0;
+  const eliteNode = floor % 10 === 0;
+  const nodeScale = bossNode ? 1.42 : eliteNode ? 1.18 : 1;
+  const enemyHp = Math.round((120 + floor * 55 + Math.pow(floor, 2) * 1.35) * highScale * nodeScale);
+  const enemyAtk = Math.round((26 + floor * 5.8 + Math.pow(floor, 1.34) * 2.05) * highScale * nodeScale);
+  const enemyDef = Math.round((12 + floor * 4.6 + Math.pow(floor, 1.3) * 1.75) * (1 + Math.max(0, floor - 100) / 140) * nodeScale);
   let hp = p.hp;
   let ehp = enemyHp;
   let totalDamage = 0;
   let totalTaken = 0;
   const effectNotes = [];
   let lastSkill = skillFor(p.classkey);
-  for (let r = 1; r <= 8 && hp > 0 && ehp > 0; r++) {
+  for (let r = 1; r <= 10 && hp > 0 && ehp > 0; r++) {
     lastSkill = skillFor(p.classkey);
     const damage = Math.max(1, Math.round((s.atk + focusRoll(s, floor) + (lastSkill.focusBoost || 0)) * skillPower(lastSkill, s)) - enemyDef);
     ehp -= damage;
     totalDamage += damage;
     const rawTaken = ehp > 0 ? Math.max(0, enemyAtk + rand(floor * 3 + 18) - Math.round(s.def * 0.85)) : 0;
     const resolved = resolveIncomingDamage(rawTaken, s, lastSkill);
-    const taken = resolved.taken;
+    const taken = Math.max(0, Math.round(resolved.taken * (1 - clamp(s.effects.damageReduction || 0, 0, 0.55))));
     if (resolved.counter) {
       ehp -= resolved.counter;
       totalDamage += resolved.counter;
@@ -1369,7 +1486,7 @@ app.post('/api/dungeon', auth, async (req, res) => {
     }
     const itemChance = chanceWithEffects(settings.dungeonEquipmentDropRate, s.effects);
     if (Math.random() < itemChance) {
-      item = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], floor);
+      item = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], equipmentLevelForDungeonFloor(floor));
     }
     const nextProgress = replay ? latestFloor : Math.min(DUNGEON_MAX_FLOOR, floor + 1);
     await q('UPDATE players SET hp=$1, gold=gold+$2, dungeonSave=$3 WHERE id=$4', [Math.max(1, hp), gold, JSON.stringify({ floor: nextProgress, hp: Math.max(1, hp), weekKey: save.weekKey }), p.id]);
@@ -1381,7 +1498,7 @@ app.post('/api/dungeon', auth, async (req, res) => {
     outcome: win ? (replay ? `你回頭掃蕩第 ${floor} 層並擊退「${enemy.name}」，最新可挑戰關卡仍維持第 ${latestFloor} 層。` : `你在八回合內擊退「${enemy.name}」，通關後地下城存檔推進到第 ${Math.min(DUNGEON_MAX_FLOOR, floor + 1)} 層。`) : `「${enemy.name}」守住了本層，你被迫撤退，最新可挑戰關卡仍維持第 ${latestFloor} 層。`,
     reward: win ? `${claimText}${item ? ` 同時發現一件 ${item.rarity} 裝備，可選擇是否替換。` : ' 本次沒有發現裝備。'}` : '撤退後不會掉落裝備，建議先休息、補藥或強化裝備後再來。',
     image: enemy.image,
-    extra: [`V1.5 週五重置與深層難度已啟用：本層敵方 HP ${enemyHp}、攻擊 ${enemyAtk}、防禦 ${enemyDef}，累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`, ...effectNotes.slice(0, 2)]
+    extra: [`V1.8 深層難度已啟用：本層敵方 HP ${enemyHp}、攻擊 ${enemyAtk}、防禦 ${enemyDef}，累計造成 ${totalDamage} 傷害，累計受到 ${totalTaken} 傷害，剩餘 HP ${Math.max(1, hp)}/${s.hpMax}。`, ...buff.notes, ...effectNotes.slice(0, 2)]
   });
   await log(p.id, 'dungeon', text);
   res.json({ win, text, item, nextFloor: win && !replay ? Math.min(DUNGEON_MAX_FLOOR, floor + 1) : latestFloor, challengedFloor: floor, weekKey: save.weekKey });
@@ -1390,6 +1507,8 @@ app.post('/api/equip', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
   const item = req.body.item;
   if (!item || !SLOTS.includes(item.slot)) return res.status(400).json({ error: '裝備格式錯誤' });
+  item.requiredLevel = requiredLevelForEquipment(item.level || 1);
+  if (Number(p.level || 1) < item.requiredLevel) return res.status(400).json({ error: `玩家等級不足，需要 Lv.${item.requiredLevel} 才能裝備。請先放入裝備暫存箱。` });
   if (!item.image || (ARMOR_SLOTS.includes(item.slot) && String(item.image).includes('/armor/'))) item.image = assetForItem(item.slot, item.level || 1, item.clsKey || p.classkey, item.rarity === 'BOSS神鑄');
   const eq = typeof p.equipment === 'string' ? JSON.parse(p.equipment) : p.equipment;
   eq[item.slot] = item;
@@ -1485,18 +1604,50 @@ app.post('/api/arena', auth, async (req, res) => {
   const settings = await getGameSettings();
   const opp = normalizePlayer(await one('SELECT p.*,u.username FROM players p JOIN users u ON u.id=p.userId WHERE p.id<>$1 ORDER BY RANDOM() LIMIT 1', [p.id]));
   if (!opp) return res.json({ text: '競技場目前沒有對手。請先建立第二位玩家或邀請朋友註冊。' });
+  const baseStats = stats(p);
+  if (Number(p.hp || 0) <= Math.max(1, Math.round(baseStats.hpMax * 0.1))) return res.status(400).json({ error: 'HP 過低，請先休息或使用藥水再進入競技場。' });
   if (!await spend(p, settings.fatigueArena)) return res.status(400).json({ error: '疲勞不足' });
-  const a = stats(p);
+  const buff = await consumeNextBattleBuff(p.id, 'arena');
+  const a = applyTemporaryEffects(baseStats, buff.effects);
   const b = stats(opp);
-  const skill = skillFor(p.classkey);
-  const oppSkill = skillFor(opp.classkey);
-  let damage = Math.max(1, Math.round((a.atk + focusRoll(a, 20) + (skill.focusBoost || 0)) * skillPower(skill, a)) - b.def);
-  const rawTaken = Math.max(1, Math.round((b.atk + focusRoll(b, 20) + (oppSkill.focusBoost || 0)) * skillPower(oppSkill, b)) - a.def);
-  const resolved = resolveIncomingDamage(rawTaken, a, skill);
-  const taken = resolved.taken;
-  damage += resolved.counter;
-  const win = damage >= taken;
+  let hp = Number(p.hp || a.hpMax);
+  let oppHp = Math.max(1, Number(opp.hp || b.hpMax));
+  let damage = 0;
+  let taken = 0;
+  let skill = skillFor(p.classkey);
+  let oppSkill = skillFor(opp.classkey);
+  const arenaNotes = [...buff.notes];
+  for (let r = 1; r <= 6 && hp > 0 && oppHp > 0; r++) {
+    skill = skillFor(p.classkey);
+    oppSkill = skillFor(opp.classkey);
+    const hit = Math.max(1, Math.round((a.atk + focusRoll(a, 20) + (skill.focusBoost || 0)) * skillPower(skill, a)) - Math.round(b.def * 0.72));
+    oppHp -= hit;
+    damage += hit;
+    if (oppHp <= 0) break;
+    const rawTaken = Math.max(1, Math.round((b.atk + focusRoll(b, 20) + (oppSkill.focusBoost || 0)) * skillPower(oppSkill, b)) - Math.round(a.def * 0.72));
+    const resolved = resolveIncomingDamage(rawTaken, a, skill);
+    const roundTaken = Math.max(0, Math.round(resolved.taken * (1 - clamp(a.effects.damageReduction || 0, 0, 0.55))));
+    if (resolved.counter) {
+      oppHp -= resolved.counter;
+      damage += resolved.counter;
+    }
+    hp -= roundTaken;
+    taken += roundTaken;
+    arenaNotes.push(...resolved.notes);
+  }
+  const win = oppHp <= 0 || (hp > 0 && damage >= taken);
   const gold = win ? 80 : 20;
+  const grossLoss = win ? 0 : Math.min(Number(p.gold || 0), Math.min(500, Math.max(30, Math.round(Number(p.gold || 0) * 0.02))));
+  let goldLoss = grossLoss;
+  let protectionText = '';
+  if (!win && grossLoss > 0 && await consumeInventory(p.id, 'cold_wallet', 1)) {
+    goldLoss = 0;
+    protectionText = '冷錢包已自動消耗，本次 PK 敗北免除金幣損失。';
+  } else if (!win && grossLoss > 0 && await consumeInventory(p.id, 'backup_tape', 1)) {
+    goldLoss = Math.floor(grossLoss / 2);
+    protectionText = `備援磁帶已自動消耗，本次金幣損失由 ${grossLoss} 降為 ${goldLoss}。`;
+  }
+  const newHp = Math.max(1, hp);
   const pPoints = Number(p.arenapoints ?? p.arenaPoints ?? 1000);
   const oPoints = Number(opp.arenapoints ?? opp.arenaPoints ?? 1000);
   const pointDelta = arenaPointDelta(pPoints, oPoints, win, p.arenastreak ?? p.arenaStreak ?? 0);
@@ -1504,9 +1655,9 @@ app.post('/api/arena', auth, async (req, res) => {
   const newPoints = Math.max(0, pPoints + pointDelta);
   const newOppPoints = Math.max(0, oPoints + defenseDelta);
   await q(`UPDATE players
-    SET gold=gold+$1, arenaPoints=$2, arenaWins=arenaWins+$3, arenaLosses=arenaLosses+$4,
-        arenaStreak=$5, arenaBest=GREATEST(COALESCE(arenaBest,1000),$2)
-    WHERE id=$6`, [gold, newPoints, win ? 1 : 0, win ? 0 : 1, win ? Number(p.arenastreak ?? p.arenaStreak ?? 0) + 1 : 0, p.id]);
+    SET gold=GREATEST(0,gold+$1-$2), hp=$3, arenaPoints=$4, arenaWins=arenaWins+$5, arenaLosses=arenaLosses+$6,
+        arenaStreak=$7, arenaBest=GREATEST(COALESCE(arenaBest,1000),$4)
+    WHERE id=$8`, [gold, goldLoss, newHp, newPoints, win ? 1 : 0, win ? 0 : 1, win ? Number(p.arenastreak ?? p.arenaStreak ?? 0) + 1 : 0, p.id]);
   await q(`UPDATE players
     SET arenaPoints=$1, arenaWins=arenaWins+$2, arenaLosses=arenaLosses+$3,
         arenaStreak=$4, arenaBest=GREATEST(COALESCE(arenaBest,1000),$1)
@@ -1514,8 +1665,9 @@ app.post('/api/arena', auth, async (req, res) => {
   const text = combatNarrative({
     title: 'PK 競技場', player: p, skill, target: safeText(opp.username), damage, taken,
     outcome: win ? `你以 ${damage} 對 ${taken} 的交換優勢擊敗 ${safeText(opp.username)}，競技場裁判宣布勝利。` : `${safeText(opp.username)} 的「${oppSkill.name}」壓過你的攻勢，本場判定敗北。`,
-    reward: `本場獲得 ${gold} 金幣；競技場積分 ${pointDelta >= 0 ? '+' : ''}${pointDelta}，目前 ${newPoints} 分（${arenaTier(newPoints)}）。`,
-    image: (CLASSES[opp.classkey] || CLASSES.risk_guardian).image
+    reward: `本場獲得 ${gold} 金幣${goldLoss ? `，敗北損失 ${goldLoss} 金幣` : ''}；競技場積分 ${pointDelta >= 0 ? '+' : ''}${pointDelta}，目前 ${newPoints} 分（${arenaTier(newPoints)}）。本場受到 ${taken} 傷害，剩餘 HP ${newHp}/${a.hpMax}。${protectionText}`,
+    image: (CLASSES[opp.classkey] || CLASSES.risk_guardian).image,
+    extra: arenaNotes.slice(0, 3)
   });
   const opponentText = combatNarrative({
     title: 'PK 競技場防衛通知', player: opp, skill: oppSkill, target: safeText(p.username), damage: taken, taken: damage,
@@ -1591,11 +1743,13 @@ app.post('/api/guild/donate', auth, async (req, res) => {
   if (!membership) return res.status(400).json({ error: '你尚未加入公會。' });
   if (amount <= 0) return res.status(400).json({ error: '捐獻金額需大於 0。' });
   if (p.gold < amount) return res.status(400).json({ error: '金幣不足。' });
+  const horn = await consumeInventory(p.id, 'service_horn', 1);
+  const treasuryAmount = horn ? Math.round(amount * 1.15) : amount;
   await q('UPDATE players SET gold=gold-$1 WHERE id=$2', [amount, p.id]);
-  await q('UPDATE guilds SET treasury=treasury+$1 WHERE name=$2', [amount, membership.guildName]);
-  await q('UPDATE guild_members SET donated=donated+$1 WHERE guildName=$2 AND playerId=$3', [amount, membership.guildName, p.id]);
-  await guildLog(membership.guildName, p.id, 'donate', `${safeText(p.username)} 捐獻 ${amount} 金幣到公會金庫。`);
-  res.json({ message: `已捐獻 ${amount} 金幣到公會金庫。`, ...(await guildPayload(p.id)) });
+  await q('UPDATE guilds SET treasury=treasury+$1 WHERE name=$2', [treasuryAmount, membership.guildName]);
+  await q('UPDATE guild_members SET donated=donated+$1 WHERE guildName=$2 AND playerId=$3', [treasuryAmount, membership.guildName, p.id]);
+  await guildLog(membership.guildName, p.id, 'donate', `${safeText(p.username)} 捐獻 ${amount} 金幣到公會金庫${horn ? `，客服號角加成後入庫 ${treasuryAmount} 金幣` : ''}。`);
+  res.json({ message: `已捐獻 ${amount} 金幣到公會金庫${horn ? `，客服號角加成後入庫 ${treasuryAmount} 金幣` : ''}。`, ...(await guildPayload(p.id)) });
 });
 app.post('/api/guild/upgrade', auth, async (req, res) => {
   const p = await getPlayer(req.user.id);
@@ -1879,6 +2033,26 @@ app.post('/api/admin/grant/resource', auth, adminAuth, async (req, res) => {
   await adminLog(req.user.id, 'grant_resource', 'player', playerId, { gold, stamina });
   res.json({ message: `已補償玩家 ${gold} 金幣、${stamina} 疲勞。` });
 });
+app.post('/api/admin/grant/gold', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const playerId = Number(req.body.playerId);
+  const gold = Math.round(clamp(req.body.gold || 0, 1, 10000000));
+  const target = await one('SELECT id FROM players WHERE id=$1', [playerId]);
+  if (!target) return res.status(404).json({ error: '找不到玩家' });
+  await q('UPDATE players SET gold=gold+$1 WHERE id=$2', [gold, playerId]);
+  await adminLog(req.user.id, 'grant_gold', 'player', playerId, { gold });
+  res.json({ message: `已補償玩家 ${gold} 金幣。` });
+});
+app.post('/api/admin/grant/stamina', auth, adminAuth, async (req, res) => {
+  if (!requireConfirm(req, res)) return;
+  const playerId = Number(req.body.playerId);
+  const stamina = Math.round(clamp(req.body.stamina || 0, 1, 200));
+  const target = await one('SELECT id FROM players WHERE id=$1', [playerId]);
+  if (!target) return res.status(404).json({ error: '找不到玩家' });
+  await q('UPDATE players SET stamina=LEAST(200,stamina+$1),staminaAt=$2 WHERE id=$3', [stamina, now(), playerId]);
+  await adminLog(req.user.id, 'grant_stamina', 'player', playerId, { stamina });
+  res.json({ message: `已補償玩家 ${stamina} 疲勞。` });
+});
 app.get('/api/admin/guilds', auth, adminAuth, async (req, res) => {
   const guilds = await all(`SELECT g.*,COUNT(gm.playerId)::int AS members
     FROM guilds g LEFT JOIN guild_members gm ON gm.guildName=g.name
@@ -1937,31 +2111,87 @@ app.get('/api/admin/logs', auth, adminAuth, async (req, res) => {
   res.json({ logs: await all('SELECT al.*,u.username FROM admin_logs al LEFT JOIN users u ON u.id=al.adminUserId ORDER BY al.id DESC LIMIT 100') });
 });
 
+async function settleBossKillRewards(day = todayKey()) {
+  const existed = await one('SELECT playerId FROM boss_kill_rewards WHERE day=$1 LIMIT 1', [day]);
+  if (existed) return { settled: false, message: '擊破獎勵已結算。' };
+  const participants = await all(`SELECT bd.playerId AS "playerId",bd.damage,u.username,p.classKey AS "classKey"
+    FROM boss_damage bd JOIN players p ON p.id=bd.playerId JOIN users u ON u.id=p.userId
+    WHERE bd.day=$1 AND bd.damage>0 ORDER BY bd.damage DESC`, [day]);
+  if (!participants.length) return { settled: false, message: '沒有可結算的參與者。' };
+  const totalDamage = participants.reduce((sum, r) => sum + Number(r.damage || 0), 0);
+  const fragmentPool = 5 + participants.length * 3;
+  const goldPool = 3000 + participants.length * 500;
+  const rewards = participants.map((r, idx) => ({
+    ...r,
+    rank: idx + 1,
+    fragments: 1,
+    gold: Math.max(100, Math.floor(goldPool * Number(r.damage || 0) / Math.max(1, totalDamage))),
+    itemSku: ''
+  }));
+  let remaining = Math.max(0, fragmentPool - rewards.length);
+  const weighted = rewards.map((r, idx) => {
+    const exact = remaining * Number(r.damage || 0) / Math.max(1, totalDamage);
+    const base = Math.floor(exact);
+    r.fragments += base;
+    return { idx, frac: exact - base };
+  });
+  remaining -= weighted.reduce((sum, x) => sum + Math.floor(x.frac + 0), 0);
+  remaining = fragmentPool - rewards.reduce((sum, r) => sum + r.fragments, 0);
+  weighted.sort((a, b) => b.frac - a.frac);
+  for (let i = 0; i < remaining; i++) rewards[weighted[i % weighted.length].idx].fragments += 1;
+  const rewardPool = SHOP.filter(x => !x[1].startsWith('potion_hp') && !x[1].startsWith('stamina'));
+  await transaction(async tx => {
+    for (const r of rewards) {
+      const itemChance = r.rank <= 3 ? 0.3 : 0.15;
+      if (Math.random() < itemChance && rewardPool.length) {
+        const item = pick(rewardPool);
+        r.itemSku = item[1];
+        await tx('INSERT INTO inventory(playerId,sku,qty) VALUES($1,$2,1) ON CONFLICT(playerId,sku) DO UPDATE SET qty=inventory.qty+1', [r.playerId, r.itemSku]);
+      }
+      await tx('UPDATE players SET bossFragments=bossFragments+$1,gold=gold+$2 WHERE id=$3', [r.fragments, r.gold, r.playerId]);
+      await tx('INSERT INTO boss_kill_rewards(day,playerId,fragments,gold,itemSku,createdAt) VALUES($1,$2,$3,$4,$5,$6)', [day, r.playerId, r.fragments, r.gold, r.itemSku, now()]);
+      await tx('INSERT INTO battle_log(playerId,mode,text,createdAt) VALUES($1,$2,$3,$4)', [r.playerId, 'boss-kill-reward', `世界 BOSS 擊破結算：依傷害貢獻獲得 ${r.fragments} 個 BOSS 碎片、${r.gold} 金幣${r.itemSku ? `，以及 ${shopItemBySku(r.itemSku)?.[0] || r.itemSku}` : ''}。`, now()]);
+    }
+  });
+  return { settled: true, participants: rewards.length, fragmentPool, goldPool };
+}
+
 async function performBossAttack(userId) {
   const p = await getPlayer(userId);
   if (!p) return { status: 404, body: { error: '角色不存在' } };
   const settings = await getGameSettings();
   const b = await ensureBoss();
   if (b.killed) return { status: 400, body: { error: '今日 BOSS 已被擊退' } };
+  const baseStats = stats(p);
+  if (Number(p.hp || 0) <= Math.max(1, Math.round(baseStats.hpMax * 0.12))) return { status: 400, body: { error: 'HP 過低，請先休息或使用藥水再挑戰世界 BOSS。' } };
   if (!await spend(p, settings.fatigueBoss)) return { status: 400, body: { error: '疲勞不足' } };
-  const s = stats(p);
+  const buff = await consumeNextBattleBuff(p.id, 'boss');
+  const s = applyTemporaryEffects(baseStats, buff.effects);
   const skill = skillFor(p.classkey);
   const bi = BOSSES[bossIndex()];
-  const damage = Math.max(50, Math.round((s.atk * 6 + s.focus * 3 + (skill.focusBoost || 0) * 5 + focusRoll(s, 250)) * skillPower(skill, s)));
+  const rawDamage = Math.max(50, Math.round((s.atk * 6 + s.focus * 3 + (skill.focusBoost || 0) * 5 + focusRoll(s, 250)) * skillPower(skill, s)));
+  const damage = Math.min(rawDamage, Math.max(1, Number(b.hp || 1)));
   const hp = Math.max(0, Number(b.hp) - damage);
   await q('UPDATE boss_state SET hp=$1, killed=$2 WHERE day=$3', [hp, hp <= 0 ? 1 : 0, todayKey()]);
   const old = await one('SELECT damage FROM boss_damage WHERE day=$1 AND playerId=$2', [todayKey(), p.id]);
   await q('INSERT INTO boss_damage(day,playerId,damage) VALUES($1,$2,$3) ON CONFLICT(day,playerId) DO UPDATE SET damage=EXCLUDED.damage', [todayKey(), p.id, (old?.damage || 0) + damage]);
+  const phase = hp <= 0 ? 0.45 : hp / Math.max(1, Number(b.maxhp || BOSS_MAX_HP)) < 0.25 ? 1.55 : hp / Math.max(1, Number(b.maxhp || BOSS_MAX_HP)) < 0.5 ? 1.25 : 1;
+  const bossCounterRaw = Math.round((360 + p.level * 18 + rand(220)) * phase);
+  const bossCounter = Math.max(0, Math.round((bossCounterRaw - s.def * 0.55) * (1 - clamp(s.effects.damageReduction || 0, 0, 0.55))));
+  const newPlayerHp = Math.max(1, Number(p.hp || 1) - bossCounter);
+  await q('UPDATE players SET hp=$1 WHERE id=$2', [newPlayerHp, p.id]);
+  const killSettlement = hp <= 0 ? await settleBossKillRewards(todayKey()) : null;
   let body;
   if (Math.random() < chanceWithEffects(settings.bossEquipmentDropRate, s.effects)) {
     const it = itemFor(p.classkey, SLOTS[rand(SLOTS.length)], EQUIPMENT_LEVEL_CAP, true);
     it.name = `${bi[2]}・${it.slot}`;
     body = {
       text: combatNarrative({
-        title: '世界 BOSS 即時戰', player: p, skill, target: bi[1], damage, taken: 0,
+        title: '世界 BOSS 即時戰', player: p, skill, target: bi[1], damage, taken: bossCounter,
         outcome: hp <= 0 ? `${bi[1]} 的核心 HP 歸零，全服今日 BOSS 被擊退。` : `${bi[1]} 被你打出破綻，稀有掉落判定成功。`,
-        reward: `超低機率掉落！你發現 ${it.name}，可比較現有裝備後決定是否替換。`,
-        image: bi[4]
+        reward: `超低機率掉落！你發現 ${it.name}，可比較現有裝備後決定是否替換。BOSS 反擊造成 ${bossCounter} 傷害，你剩餘 HP ${newPlayerHp}/${s.hpMax}。${killSettlement?.settled ? `擊破結算已發放：${killSettlement.fragmentPool} 碎片池、${killSettlement.goldPool} 金幣池。` : ''}`,
+        image: bi[4],
+        extra: buff.notes
       }),
       item: it,
       damage,
@@ -1976,10 +2206,11 @@ async function performBossAttack(userId) {
     }
     body = {
       text: combatNarrative({
-        title: '世界 BOSS 即時戰', player: p, skill, target: bi[1], damage, taken: 0,
+        title: '世界 BOSS 即時戰', player: p, skill, target: bi[1], damage, taken: bossCounter,
         outcome: `${bi[1]} 剩餘 HP ${hp}/${b.maxhp}，你的累積傷害已寫入今日 BOSS 排行榜。`,
-        reward: frag > 0 ? `你獲得 ${frag} 個 BOSS 碎片；累積 30 個碎片可合成隨機部位 BOSS 裝備。` : `本輪未取得 BOSS 碎片；碎片掉落率已下修，仍可透過持續參戰累積合成資源。`,
-        image: bi[4]
+        reward: `${frag > 0 ? `你獲得 ${frag} 個 BOSS 碎片；累積 30 個碎片可合成隨機部位 BOSS 裝備。` : `本輪未取得 BOSS 碎片；碎片掉落率已下修，仍可透過持續參戰累積合成資源。`} BOSS 反擊造成 ${bossCounter} 傷害，你剩餘 HP ${newPlayerHp}/${s.hpMax}。${killSettlement?.settled ? `擊破結算已發放：${killSettlement.fragmentPool} 碎片池、${killSettlement.goldPool} 金幣池。` : ''}`,
+        image: bi[4],
+        extra: buff.notes
       }),
       damage,
       hp,
