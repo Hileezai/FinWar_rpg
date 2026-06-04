@@ -25,6 +25,7 @@ const names = {
   forge: '強化附魔',
   rank: '排行榜',
   catalog: '裝備圖鑑',
+  updates: '更新內容',
   admin: '管理後台'
 };
 
@@ -40,6 +41,7 @@ const navIcons = {
   forge: 'assets/images/ui/settings.png',
   rank: 'assets/images/ui/rank.png',
   catalog: 'assets/images/ui/bag.png',
+  updates: 'assets/images/ui/quest.png',
   admin: 'assets/images/ui/settings.png'
 };
 
@@ -134,7 +136,7 @@ function connectSocket() {
   socket.on('chatHistory', d => {
     if (!d?.channel) return;
     chatMessages[d.channel] = d.messages || [];
-    renderChatBox();
+    renderChatBox(true);
   });
   socket.on('chatMessage', msg => {
     const ch = msg?.channel === 'guild' ? 'guild' : 'global';
@@ -195,7 +197,7 @@ function render() {
   let c = '';
   if (page === 'home') {
     const cls = meta.classes[p.classKey];
-    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP</button></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>需求 Lv.${it.requiredLevel || 1}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}${effectText(it)}</div></div>`).join('')}</div></div></div>${storageGrid()}<div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
+    c = `<div class="grid"><div class="card class-card">${img(cls.image, 'sprite-img big', cls.name)}<h2>${esc(cls.name)}</h2><p>${esc(cls.desc)}</p><p>Lv.${p.level}｜EXP ${p.exp}/${p.level * 120}</p><p>ATK ${s.atk}｜DEF ${s.def}｜FOCUS ${s.focus}</p>${skillPills(cls)}<button onclick="rest()">休息恢復 HP（${me.restToday || 0}/${me.restLimit || meta.rest?.dailyLimit || 15}）</button><p class="small">休息費用 ${meta.rest?.cost || 250} 金幣，沒有金幣或次數時仍會自動回復少量 HP。</p></div><div class="card"><h3>裝備</h3><div class="equip">${Object.entries(eq).map(([slot, it]) => `<div class="panel equip-card">${img(itemImage(it), 'item-icon', it.name)}<div><b>${esc(slot)}</b><br><span class="rarity-${it.rarity}">${esc(it.name)}</span><br>需求 Lv.${it.requiredLevel || 1}｜攻${it.atk} 防${it.def} 專${it.focus}<br>+${it.enhance}｜${esc(it.enchant)}｜${esc(it.spec)}${effectText(it)}</div></div>`).join('')}</div></div></div>${storageGrid()}<div class="card"><h3>近期戰鬥紀錄</h3><div class="log">${me.logs.map(l => `<p>${new Date(Number(l.createdat || l.createdAt)).toLocaleString()}｜${l.text}</p>`).join('')}</div></div>`;
   }
   if (page === 'training') {
     const firstMap = meta.mapMonsters?.maps?.[0];
@@ -221,7 +223,7 @@ function render() {
     c = `<div id="guildBox" class="card">讀取公會資料中...</div>`;
   }
   if (page === 'daily') {
-    c = `<div class="card"><h2>每日任務：台灣銀行業知識問答</h2><p>每日可進行一次，一天五題。題庫包含公平待客、洗錢防制、資訊安全社交工程防護、金融業法遵與市場風險概念。答對越多，EXP 與金幣越多。</p><div id="dailybox">讀取中...</div></div>`;
+    c = `<div class="card"><h2>每日任務：台灣銀行業知識問答</h2><p>每日可進行一次，一天五題。題庫已擴充為 30 題，包含公平待客、洗錢防制、資訊安全、金融法遵、市場風險與金融基測 FIT 概念改寫題。答對越多，EXP 與金幣越多。</p><div id="dailybox">讀取中...</div></div>`;
   }
   if (page === 'shop') {
     c = `<div class="grid">${meta.shop.map(it => `<div class="card shop-card">${img(shopImage(it), 'item-icon-lg', it[0])}<h3>${esc(it[0])}</h3><p>${esc(it[3])}</p><p>價格 ${it[2]}｜每日庫存 ${it[4]}</p><button onclick="buy('${it[1]}')">購買</button></div>`).join('')}</div>`;
@@ -237,13 +239,17 @@ function render() {
   }
   if (page === 'catalog') {
     const cap = meta.equipmentLevelCap || FALLBACK_EQUIPMENT_LEVEL_CAP;
-    c = `<div class="card"><h2>裝備圖鑑</h2><p>伺服器已內建 6 職業 x 8 部位 x ${cap} 件職業裝備，並新增更多稀有級別。下方展示你職業的 ${cap} 件武器。</p><div id="catalog">讀取中...</div></div>`;
+    c = `<div class="card"><h2>裝備圖鑑</h2><p>每 20 等為一個區間展開載入，降低一次讀取大量圖示的流量。</p><div class="catalog-toolbar"><label>部位<select id="catalogSlot" onchange="loadCatalog(1)">${(meta.slots || Object.keys(eq)).map(s => `<option>${esc(s)}</option>`).join('')}</select></label></div><div id="catalogRanges" class="catalog-ranges"></div><div id="catalog">讀取中...</div></div>`;
+  }
+  if (page === 'updates') {
+    c = `<div class="card"><h2>更新內容</h2><p>此頁會顯示管理後台發布並啟用的更新公告。</p><div id="updatesBox">讀取中...</div></div>`;
   }
   $('#app').innerHTML = layout(c);
   renderChatBox();
   if (page === 'boss') loadBoss();
   if (page === 'rank') loadRanks();
   if (page === 'catalog') loadCatalog();
+  if (page === 'updates') loadUpdates();
   if (page === 'daily') loadDailyQuiz();
   if (page === 'guild') loadGuild();
   if (page === 'admin' && me.user.isAdmin) loadAdmin();
@@ -408,6 +414,17 @@ function rolePower(role) {
 function roleOptions(current) {
   return ['vice', 'officer', 'member'].map(r => `<option value="${r}" ${current === r ? 'selected' : ''}>${roleLabels[r]}</option>`).join('');
 }
+function guildWarehouseHtml(data, power) {
+  const rows = data.warehouse || [];
+  const claim = data.warehouseClaim || {};
+  const stocked = rows.filter(it => Number(it.qty || 0) > 0);
+  const canDeposit = power >= 2;
+  const owned = (me.inventory || []).filter(it => Number(it.qty || 0) > 0 && rows.some(w => w.sku === it.sku));
+  const deposit = canDeposit ? `<div class="warehouse-deposit"><select id="guildWarehouseSku">${owned.map(it => `<option value="${it.sku}">${esc(it.name)} x${it.qty}</option>`).join('')}</select><input id="guildWarehouseQty" type="number" min="1" value="1"><button onclick="depositGuildWarehouse()" ${owned.length ? '' : 'disabled'}>捐獻道具</button></div>` : '<p class="small">幹部以上可捐獻背包道具。</p>';
+  const stockCards = stocked.length ? stocked.map(it => `<div class="bag-slot">${img(it.image, 'item-icon-lg', it.name)}<b>${esc(it.name)}</b><span>x${it.qty}</span><button onclick="claimGuildWarehouse('${it.sku}')" ${claim.claimed ? 'disabled' : ''}>領取</button></div>`).join('') : '<p class="small">目前公會倉庫沒有道具庫存。</p>';
+  const claimText = claim.claimed ? `<p class="small">今日已領取：${esc(claim.itemName || claim.sku)}。每日只能領取 1 個公會倉庫道具。</p>` : '<p class="small">今日尚未領取，每位會員每日可領取 1 個道具。</p>';
+  return `<div class="panel guild-warehouse"><h3>公會道具倉庫</h3>${deposit}${claimText}<div class="bag-grid">${stockCards}</div></div>`;
+}
 async function loadGuild() {
   const box = $('#guildBox');
   if (!box) return;
@@ -436,6 +453,7 @@ function guildHtml(data) {
   ${canManage ? `<div class="panel"><h3>公會升級 / 公告</h3><button onclick="upgradeGuild()">使用金庫升級</button><textarea id="guildNotice" maxlength="180">${esc(g.notice || '')}</textarea><button onclick="updateGuildNotice()">更新公告</button></div>` : ''}
   ${isLeader ? `<div class="panel"><h3>公會改名</h3><input id="renameGuildName" maxlength="16" placeholder="新公會名稱"><p class="small">改名費用 ${g.renameCost} 金幣，冷卻 7 天。</p><button onclick="renameGuild()">改名</button></div>` : ''}
   <div class="panel"><h3>離開公會</h3><button onclick="leaveGuild()">離開公會</button></div></div>
+  ${guildWarehouseHtml(data, power)}
   <h3>成員資訊</h3><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>成員</th><th>職階</th><th>職業</th><th>等級</th><th>HP</th><th>捐獻</th><th>操作</th></tr></thead><tbody>${memberRows}</tbody></table></div>
   ${canApprove ? `<h3>入會申請</h3><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>申請者</th><th>職業</th><th>等級</th><th>留言</th><th>操作</th></tr></thead><tbody>${appRows || `<tr><td colspan="5" class="small">目前沒有待審核申請。</td></tr>`}</tbody></table></div>` : ''}
   <h3>公會紀錄</h3><div class="log">${logs || '<p class="small">尚無公會紀錄。</p>'}</div>`;
@@ -456,6 +474,12 @@ async function applyGuild(name) {
 }
 async function donateGuild() {
   await guildAction('/api/guild/donate', { amount: donateAmount.value });
+}
+async function depositGuildWarehouse() {
+  await guildAction('/api/guild/warehouse/deposit', { sku: guildWarehouseSku.value, qty: guildWarehouseQty.value });
+}
+async function claimGuildWarehouse(sku) {
+  await guildAction('/api/guild/warehouse/claim', { sku });
 }
 async function upgradeGuild() {
   await guildAction('/api/guild/upgrade');
@@ -503,13 +527,14 @@ function adminHtml(summary, players, guilds) {
     ${adminSettingInput('fatigueBoss','BOSS疲勞',settings.fatigueBoss)}
     ${adminSettingInput('fatigueArena','競技場疲勞',settings.fatigueArena)}
     ${adminSettingInput('restCost','休息費用',settings.restCost)}
+    ${adminSettingInput('restDailyLimit','每日休息次數',settings.restDailyLimit)}
     ${adminSettingInput('dungeonEquipmentDropRate','地下城掉裝率',settings.dungeonEquipmentDropRate)}
     ${adminSettingInput('bossEquipmentDropRate','BOSS掉裝率',settings.bossEquipmentDropRate)}
     ${adminSettingInput('bossFragmentDropRate','BOSS碎片率',settings.bossFragmentDropRate)}
     ${adminSettingInput('bossFragmentBonusDropRate','BOSS額外碎片率',settings.bossFragmentBonusDropRate)}
   </div><button onclick="adminSaveSettings()">儲存參數</button></div>
   <div class="panel"><h3>道具 / 資源補償</h3><div class="settings-grid"><input id="grantPlayerId" placeholder="玩家ID"><select id="grantSku">${meta.shop.map(it => `<option value="${it[1]}">${esc(it[0])}</option>`).join('')}</select><input id="grantQty" type="number" min="1" value="1"><button onclick="adminGrantMaterial()">補發道具</button><input id="grantGold" type="number" min="1" value="1000" placeholder="補償金幣"><button onclick="adminGrantGold()">補償金幣</button><input id="grantStamina" type="number" min="1" max="200" value="50" placeholder="補償疲勞"><button onclick="adminGrantStamina()">補償疲勞</button></div></div>
-  <div class="panel"><h3>系統公告</h3><input id="annTitle" placeholder="公告標題"><textarea id="annText" maxlength="500" placeholder="公告內容"></textarea><button onclick="adminCreateAnnouncement()">發布公告</button><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>標題</th><th>內容</th><th>狀態</th><th>操作</th></tr></thead><tbody>${announcements || `<tr><td colspan="4" class="small">尚無公告</td></tr>`}</tbody></table></div></div>
+  <div class="panel"><h3>更新內容 / 系統公告</h3><input id="annTitle" placeholder="更新標題"><textarea id="annText" maxlength="500" placeholder="更新內容或公告文字"></textarea><button onclick="adminCreateAnnouncement()">發布內容</button><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>標題</th><th>內容</th><th>狀態</th><th>操作</th></tr></thead><tbody>${announcements || `<tr><td colspan="4" class="small">尚無公告</td></tr>`}</tbody></table></div></div>
   <div class="panel"><h3>管理員操作紀錄</h3><div class="log">${logs || '<p class="small">尚無紀錄</p>'}</div></div>`;
 }
 function adminSettingInput(key, label, value) {
@@ -570,7 +595,7 @@ async function adminDisbandGuild(name) {
 }
 async function adminSaveSettings() {
   const settings = {};
-  ['fatigueTraining', 'fatigueDungeon', 'fatigueBoss', 'fatigueArena', 'restCost', 'dungeonEquipmentDropRate', 'bossEquipmentDropRate', 'bossFragmentDropRate', 'bossFragmentBonusDropRate']
+  ['fatigueTraining', 'fatigueDungeon', 'fatigueBoss', 'fatigueArena', 'restCost', 'restDailyLimit', 'dungeonEquipmentDropRate', 'bossEquipmentDropRate', 'bossFragmentDropRate', 'bossFragmentBonusDropRate']
     .forEach(k => { settings[k] = document.querySelector('#set_' + k)?.value; });
   await adminPost('/api/admin/settings', { settings });
 }
@@ -596,7 +621,23 @@ async function bossAtk() {
   } catch (e) { alert(e.message); }
 }
 async function arenaFight() {
-  await act('/api/arena');
+  try {
+    const j = await api('/api/arena', { method: 'POST' });
+    modal(arenaBattleHtml(j));
+    await refresh();
+  } catch (e) { alert(e.message); }
+}
+function arenaBattleHtml(j) {
+  const b = j.battle;
+  if (!b) return j.text || j.message || '';
+  const rounds = (b.rounds || []).slice(0, 10);
+  return `<div class="battle-stage ${b.win ? 'battle-win' : 'battle-lose'}">
+    <div class="duelist player-duelist">${img(b.playerImage, 'battle-sprite', me.user.username)}<b>${esc(me.user.username)}</b><span>HP ${b.hp}/${b.hpMax}</span></div>
+    <div class="skill-burst"></div>
+    <div class="duelist opponent-duelist">${img(b.opponentImage, 'battle-sprite', b.opponent)}<b>${esc(b.opponent)}</b><span>HP ${Math.max(0, b.opponentHp)}/${b.opponentHpMax}</span></div>
+  </div>
+  <div class="round-strip">${rounds.map(r => `<div class="round-card"><b>R${r.no}</b><span>${esc(r.playerSkill)}：${r.damage}</span><span>${esc(r.opponentSkill)}：${r.taken}</span>${r.counter ? `<span class="ok">反擊 ${r.counter}</span>` : ''}</div>`).join('')}</div>
+  <hr>${j.text || ''}`;
 }
 async function craftBoss() {
   try {
@@ -651,10 +692,32 @@ function rankTable(title, rows, cols, variant = '') {
     : `<tr><td colspan="${cols.length + 1}" class="small">目前尚無資料</td></tr>`;
   return `<section class="rank-section ${variant}">${title ? `<h3>${esc(title)}</h3>` : ''}<div class="rank-table-wrap"><table class="rank-table"><thead><tr><th>名次</th>${cols.map(col => `<th>${esc(col.label)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
-async function loadCatalog() {
-  const j = await api('/api/catalog');
-  const arr = j[me.player.classKey]['武器'];
-  catalog.innerHTML = `<div class="catalog-grid">${arr.map(it => itemHtml(it)).join('')}</div>`;
+function catalogRangeButtons(activeStart = 1) {
+  const cap = meta.equipmentLevelCap || FALLBACK_EQUIPMENT_LEVEL_CAP;
+  const ranges = [];
+  for (let start = 1; start <= cap; start += 20) {
+    const end = Math.min(cap, start + 19);
+    ranges.push(`<button class="${Number(activeStart) === start ? 'active' : ''}" onclick="loadCatalog(${start})">Lv.${start}-${end}</button>`);
+  }
+  return ranges.join('');
+}
+async function loadCatalog(start = 1) {
+  const cap = meta.equipmentLevelCap || FALLBACK_EQUIPMENT_LEVEL_CAP;
+  const from = Math.max(1, Math.min(cap, Number(start || 1)));
+  const to = Math.min(cap, from + 19);
+  const slot = $('#catalogSlot')?.value || (meta.slots || [])[4] || Object.keys(eqObj(me.player.equipment))[0];
+  const ranges = $('#catalogRanges');
+  if (ranges) ranges.innerHTML = catalogRangeButtons(from);
+  const j = await api(`/api/catalog?classKey=${encodeURIComponent(me.player.classKey)}&slot=${encodeURIComponent(slot)}&from=${from}&to=${to}`);
+  const arr = j.items || [];
+  catalog.innerHTML = `<h3>${esc(slot)}｜Lv.${from}-${to}</h3><div class="catalog-grid">${arr.map(it => itemHtml(it)).join('')}</div>`;
+}
+async function loadUpdates() {
+  const box = $('#updatesBox');
+  if (!box) return;
+  const j = await api('/api/updates');
+  const rows = j.updates || [];
+  box.innerHTML = rows.length ? `<div class="updates-list">${rows.map(u => `<article class="update-entry"><h3>${esc(u.title)}</h3><p class="small">${new Date(Number(u.createdat || u.createdAt || Date.now())).toLocaleString()}</p><p>${esc(u.text)}</p></article>`).join('')}</div>` : '<p class="small">目前尚未發布更新內容。</p>';
 }
 async function toast(j) {
   modal(j.text || j.message);
@@ -703,6 +766,7 @@ function chatSidebar() {
 function renderChatBox(scrollBottom = false) {
   const box = document.querySelector('#chatMessages');
   if (!box) return;
+  const nearBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 48;
   const guild = chatStatus.guild || me?.player?.guild || '';
   if (chatChannel === 'guild' && !guild) {
     box.innerHTML = `<p class="small">尚未加入公會。請先到「公會/攻城」建立或加入公會後，再使用公會聊天室。</p>`;
@@ -710,12 +774,13 @@ function renderChatBox(scrollBottom = false) {
   }
   const rows = (chatMessages[chatChannel] || []).slice(-50);
   box.innerHTML = rows.length ? rows.map(m => `<div class="chat-msg"><span class="chat-time">${new Date(Number(m.at || Date.now())).toLocaleTimeString()}</span> <b>${esc(m.username || '玩家')}</b><br>${esc(m.text || '')}</div>`).join('') : `<p class="small">目前沒有訊息，成為第一位發言的玩家吧。</p>`;
-  if (scrollBottom) box.scrollTop = box.scrollHeight;
+  if (scrollBottom || nearBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 function setChatChannel(ch) {
   chatChannel = ch === 'guild' ? 'guild' : 'global';
   localStorage.chatChannel = chatChannel;
   render();
+  renderChatBox(true);
 }
 function addChatSystem(text) {
   chatMessages[chatChannel] = [...(chatMessages[chatChannel] || []), { username: '系統', text, at: Date.now(), channel: chatChannel }].slice(-80);

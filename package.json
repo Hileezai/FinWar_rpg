@@ -1,7 +1,7 @@
 {
   "name": "finance-rpg-taiwan-pg-socket",
-  "version": "1.8.0",
-  "description": "8-bit Taiwan finance RPG with v1.8 battle balance, boss kill rewards, equipment storage, dungeon 200F and item effects",
+  "version": "1.9.0",
+  "description": "8-bit Taiwan finance RPG with v1.9 changelog admin publishing, guild warehouse, lazy catalog, chat autoscroll, rest limits and arena battle animation",
   "main": "server.js",
   "type": "module",
   "scripts": {
